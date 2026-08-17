@@ -44,7 +44,6 @@
           # Programming Languages and Runtimes
           python3
           perl
-          jdk8
 
           # Development Libraries
           libxml2
