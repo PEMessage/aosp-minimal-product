@@ -45,6 +45,7 @@
           # Programming Languages and Runtimes
           python3
           perl
+          jdk11
 
           # Development Libraries
           libxml2
@@ -52,8 +53,8 @@
 
         profile = ''
           export USE_CCACHE=1
-          export ANDROID_JAVA_HOME=${pkgs.jdk8.home}
-          export JAVA_HOME=${pkgs.jdk8.home}
+          export ANDROID_JAVA_HOME=${pkgs.jdk11.home}
+          export JAVA_HOME=${pkgs.jdk11.home}
         '';
 
       }).env;

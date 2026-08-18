@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Rewrite the LineageOS manifest to use Tsinghua mirrors for both remotes.
+"""Rewrite the LineageOS 19.1 manifest for the Tsinghua mirrors.
 
 The upstream manifest has two remotes:
   github: fetch=".."          -> resolves under the mirror's lineageOS/ tree
   aosp:   fetch=googlesource  -> rewritten here to the Tsinghua AOSP mirror
+
+In addition every <project> gets clone-depth="1": the default.xml does not set
+clone-depth on the LineageOS-hosted projects, and modern `repo` no longer
+honours `repo init --depth`. Without this, syncing e.g. prebuilts/build-tools
+would pull years of full history from a CN mirror.
 
 Prints the rewritten manifest to stdout.
 """
@@ -40,6 +45,16 @@ def main() -> int:
     content = re.sub(
         r'(<remote\s+name="aosp"[^>]*fetch=")https://android\.googlesource\.com(")',
         rf'\g<1>{TUNA_AOSP}\g<2>',
+        content,
+    )
+
+    # Shallow-clone every project (fast CN syncs, no full history).
+    content = re.sub(
+        r'(<project\b(?=[^>]*path="[^"]+")[^>]*?)(/)?>',
+        lambda m: m.group(1)
+        + (' clone-depth="1"' if 'clone-depth=' not in m.group(1) else '')
+        + (m.group(2) or '')
+        + '>',
         content,
     )
 

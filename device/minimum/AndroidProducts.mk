@@ -1,3 +1,3 @@
-# AndroidProducts.mk - minimum product
+# AndroidProducts.mk - lineage_minimum product
 PRODUCT_MAKEFILES := \
-    $(LOCAL_DIR)/minimum.mk
+    $(LOCAL_DIR)/lineage_minimum.mk
