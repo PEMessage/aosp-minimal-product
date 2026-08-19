@@ -74,7 +74,7 @@ system/tools/aidl system/tools/hidl external/libcxx external/zlib
 external/protobuf external/googletest toolchain/pgo-profiles
 external/avb external/vboot_reference system/update_engine
 external/clang external/llvm external/python/cpython2 external/icu
-prebuilts/jdk/jdk8 prebuilts/jdk/jdk9"
+prebuilts/jdk/jdk8 prebuilts/jdk/jdk9 vendor/lineage"
   local missing=()
   for d in $deps; do [[ -d "$TOP/$d" ]] || missing+=("$d"); done
   [[ ${#missing[@]} -eq 0 ]] || repo sync -c -j "$JOBS" "${missing[@]}"
