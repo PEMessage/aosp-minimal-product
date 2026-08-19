@@ -23,6 +23,7 @@
           bison
           flex
           gperf
+          ccache
 
           # System Administration and Performance
           procps
