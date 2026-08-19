@@ -24,9 +24,25 @@ It is distro-agnostic and pulls everything from Tsinghua mirrors (China-friendly
   are far too slow over a CN mirror).
 - `scripts/sync_paths.py` — extracts the minimal `build/` + curated `prebuilts/`
   paths from the manifest.
+- `scripts/setup_go_tools.sh` — builds `gopls` + `dlv` with the tree's prebuilt
+  Go (go1.15.6) and prints the PATH entry to add.
+- `docs/` — notes on design decisions (e.g. `docs/why-lineage_minimum.md`).
 - `code/` — the actual AOSP tree (repo workspace), created by `bootstrap.sh`.
 
 ## Commands
+
+The Android build needs an FHS filesystem layout (`/bin/pwd` etc.). On NixOS
+this comes from the repo's dev shell — enter it before anything else:
+
+```sh
+# NixOS: enter the FHS dev environment
+#   interactive (drop into a shell):
+nix develop
+#   non-interactive (run one command inside it):
+nix develop --command ./bootstrap.sh
+```
+
+Once inside the FHS environment:
 
 ```sh
 # Build everything (idempotent; safe to re-run)
@@ -42,6 +58,20 @@ m nothing
 `m nothing` is the build target of record — it exercises the full build system
 (envsetup, soong bootstrap, kati, ninja, vendor hooks) without producing device
 artifacts.
+
+### Go dev tools (gopls + dlv)
+
+The tree's prebuilt Go is go1.15.6 (too old to run modern `go install
+pkg@version`). `setup_go_tools.sh` builds the last compatible releases into the
+same dir as the prebuilt go binary, so one PATH entry covers go + gopls + dlv:
+
+```sh
+# Build + print the PATH line (gopls v0.9.5, dlv v1.7.0)
+./scripts/setup_go_tools.sh
+
+# Or add the PATH entry to your shell:
+eval "$(./scripts/setup_go_tools.sh --print-path)"
+```
 
 ## Minimal repo set
 
