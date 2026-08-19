@@ -52,7 +52,7 @@ init_tree() {
   # --no-repo-verify: no gpg in the FHS container, skips tag signature check.
   repo init -u "$MANIFEST_URL" -b "$BRANCH" \
     --repo-url https://mirrors.ustc.edu.cn/aosp/git-repo.git \
-    --no-repo-verify --no-clone-bundle
+    --no-repo-verify --no-clone-bundle --depth 1
   # Rewrite remotes to Tsinghua mirrors (aosp remote -> TUNA AOSP).
   "$HERE/scripts/make_manifest.py" \
     "$TOP/.repo/manifests/default.xml" > "$TOP/.repo/manifests/default.xml.tuna"
