@@ -18,10 +18,10 @@ It is distro-agnostic and pulls everything from Tsinghua mirrors (China-friendly
 - `device/minimum/` — the custom `lineage_minimum` product
   (`lunch lineage_minimum-eng`). A headless x86_64 board: no kernel, no
   bootloader, no images.
-- `scripts/make_manifest.py` — rewrites manifest remotes to Tsinghua AOSP and
-  injects `clone-depth="1"` on every project (modern `repo` ignores
-  `repo init --depth`, and full-history syncs of e.g. `prebuilts/build-tools`
-  are far too slow over a CN mirror).
+- `scripts/make_manifest.py` — rewrites manifest remotes to Tsinghua AOSP.
+  Shallow cloning is handled by `repo init --depth 1` (bootstrap.sh pins the
+  repo tool to tag `v2.66.1`, which applies that depth to every project lacking
+  an explicit `clone-depth`), so no clone-depth injection is needed.
 - `scripts/sync_paths.py` — extracts the minimal `build/` + curated `prebuilts/`
   paths from the manifest.
 - `scripts/setup_go_tools.sh` — builds `gopls` + `dlv` with the tree's prebuilt
