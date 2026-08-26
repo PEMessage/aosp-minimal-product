@@ -60,6 +60,9 @@
           export USE_CCACHE=1
           export ANDROID_JAVA_HOME=${pkgs.jdk11.home}
           export JAVA_HOME=${pkgs.jdk11.home}
+          # this fix nvim terminal report error
+          # since default one /nix/store/.../bash-5.3p9/bin/bash without readline support
+          export SHELL=/usr/bin/bash
         '';
 
       }).env;
