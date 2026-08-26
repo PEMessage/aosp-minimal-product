@@ -13,6 +13,10 @@
       devShells.${system}.default = (pkgs.buildFHSEnv {
         name = "aosp-env";
         targetPkgs = pkgs: with pkgs; [
+          # unix
+          bash
+          bashdb
+
           # Version Control
           git
           git-repo
@@ -46,6 +50,7 @@
           python3
           perl
           jdk11
+          xmlstarlet
 
           # Development Libraries
           libxml2
