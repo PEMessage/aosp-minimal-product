@@ -63,6 +63,23 @@
           # this fix nvim terminal report error
           # since default one /nix/store/.../bash-5.3p9/bin/bash without readline support
           export SHELL=/usr/bin/bash
+          tcd() {
+            local target="$1"
+            local current_dir="$(pwd)"
+
+            while [ "$current_dir" != "/" ]; do
+              if [ -e "$current_dir/$target" ]; then
+                cd "$current_dir"
+                return 0
+                current_dir="$(dirname "$current_dir")"
+              fi
+            done
+
+            echo "No parent directory containing $target found; staying in $(pwd)."
+            return 1
+          }
+
+          export PATH="$(tcd flake.nix && readlink --canonicalize-missing code/prebuilts/go/linux-x86/bin):$PATH"
         '';
 
       }).env;
