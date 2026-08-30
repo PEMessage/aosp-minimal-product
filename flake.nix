@@ -71,8 +71,8 @@
               if [ -e "$current_dir/$target" ]; then
                 cd "$current_dir"
                 return 0
-                current_dir="$(dirname "$current_dir")"
               fi
+              current_dir="$(dirname "$current_dir")"
             done
 
             echo "No parent directory containing $target found; staying in $(pwd)."
