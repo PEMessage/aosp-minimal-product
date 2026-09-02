@@ -1,0 +1,11 @@
+--- a/code/build/make/envsetup.sh
++++ b/code/build/make/envsetup.sh
+@@ -142,6 +142,8 @@
+         echo "Couldn't locate the top of the tree.  Try setting TOP." >&2
+         return 1
+     fi
++    # PEM Patch:
++    # (\cd $T; "$BASHDB_BIN" --quiet --tty "$BASHDB_FIFO" --tty_in "$BASHDB_FIFO_IN"  --library "$BASHDB_LIB" --  build/soong/soong_ui.bash --dumpvar-mode $1)
+     (\cd $T; build/soong/soong_ui.bash --dumpvar-mode $1)
+ }
+ 

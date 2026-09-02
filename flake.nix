@@ -80,6 +80,7 @@
           }
 
           export PATH="$(tcd flake.nix && readlink --canonicalize-missing code/prebuilts/go/linux-x86/bin):$PATH"
+          export PATH="$(tcd flake.nix && readlink --canonicalize-missing bin):$PATH"
         '';
 
       }).env;

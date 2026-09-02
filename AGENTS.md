@@ -26,6 +26,13 @@ It is distro-agnostic and pulls everything from Tsinghua mirrors (China-friendly
   paths from the manifest.
 - `scripts/setup_go_tools.sh` — builds `gopls` + `dlv` with the tree's prebuilt
   Go (go1.15.6) and prints the PATH entry to add.
+- `bin/patchman` — per-file patch manager (see `docs/patchman.md`). Any
+  directory containing a `patchdb/` folder is treated as a root; patches are
+  stored inside `patchdb/` mirroring source paths, e.g.
+  `code/build/blueprint/microfactory/microfactory.bash` ->
+  `patchdb/code/build/blueprint/microfactory/microfactory.bash.patch`. This is
+  how in-tree source tweaks (microfactory dlv hook, envsetup bashdb line, ...)
+  are kept reproducible and git-tracked.
 - `docs/` — notes on design decisions (e.g. `docs/why-lineage_minimum.md`).
 - `code/` — the actual AOSP tree (repo workspace), created by `bootstrap.sh`.
 

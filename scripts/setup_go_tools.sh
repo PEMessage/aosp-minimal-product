@@ -4,11 +4,18 @@
 #
 # The Android 12 prebuilt Go is go1.15.6. Per gopls' official support policy
 # (go.googlesource.com/tools gopls README) the last gopls version that
-# supports Go 1.15 is v0.9.5; dlv's last version that still builds on go1.15
-# is v1.7.0 (v1.7.1+ pulls in a dependency requiring Go 1.17).
+# supports Go 1.15 is v0.9.5. dlv's last release that still compiles on
+# go1.15 is v1.20.1 (v1.21.0 uses os.ReadDir, a Go 1.16 stdlib API). The
+# limits below were verified by building each release with the actual prebuilt
+# toolchain.
 #
 #   gopls v0.9.5   (Go 1.15 -> final supported version per the gopls policy)
-#   dlv   v1.7.0   (Go 1.15 -> last buildable release; v1.7.1+ needs Go 1.17)
+#   dlv   v1.20.1  (Go 1.15 -> last buildable release; v1.21.0 needs Go 1.16;
+#                   note delve tags jump from v1.9.1 to v1.20.0)
+#
+# dlv v1.20.x targets Go 1.20+ runtimes. It is fine as a standalone dev tool,
+# but prefer an older dlv (e.g. v1.7.0) if you need to debug binaries that the
+# go1.15.6 toolchain itself compiled.
 #
 # The binaries are installed next to the prebuilt go binary, so a single PATH
 # entry covers go + gopls + dlv:
@@ -40,7 +47,7 @@ gopls_version() {
 }
 dlv_version() {
     case "$1" in
-        1.15) echo "v1.7.0" ;;
+        1.15) echo "v1.20.1" ;;
         *)    echo "latest" ;;
     esac
 }
