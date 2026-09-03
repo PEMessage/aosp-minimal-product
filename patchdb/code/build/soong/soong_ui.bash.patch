@@ -1,0 +1,9 @@
+--- a/code/build/soong/soong_ui.bash
++++ b/code/build/soong/soong_ui.bash
+@@ -55,4 +55,5 @@
+ soong_build_go soong_ui android/soong/cmd/soong_ui
+ 
+ cd ${TOP}
+-exec "$(getoutdir)/soong_ui" "$@"
++dlv --check-go-version=false exec --headless --api-version 2 --listen=:2345 "$(getoutdir)/soong_ui" -- "$@"
++# exec "$(getoutdir)/soong_ui" "$@"
