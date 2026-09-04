@@ -1,13 +1,11 @@
 --- a/code/build/blueprint/microfactory/microfactory.bash
 +++ b/code/build/blueprint/microfactory/microfactory.bash
-@@ -59,7 +59,9 @@
+@@ -59,6 +59,8 @@
  
      rm -f "${BUILDDIR}/.$1.trace"
      # GOROOT must be absolute because `go run` changes the local directory
--    GOROOT=$(cd $GOROOT; pwd) ${mf_cmd} -b "${mf_bin}" \
-+    echo "GOROOT is $GOROOT"
-+    sleep 1
-+    GOROOT=$(cd $GOROOT; pwd) dlv --check-go-version=false exec --headless --api-version 2 --listen=:2345 ${mf_cmd} --  -b "${mf_bin}" \
++    # echo "GOROOT is $GOROOT"
++    # GOROOT=$(cd $GOROOT; pwd) dlv --check-go-version=false exec --headless --api-version 2 --listen=:2345 ${mf_cmd} --  -b "${mf_bin}" \
+     GOROOT=$(cd $GOROOT; pwd) ${mf_cmd} -b "${mf_bin}" \
              -pkg-path "github.com/google/blueprint=${BLUEPRINTDIR}" \
              -trimpath "${SRCDIR}" \
-             ${EXTRA_ARGS} \
