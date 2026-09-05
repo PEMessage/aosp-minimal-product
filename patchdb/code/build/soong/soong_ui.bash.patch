@@ -1,3 +1,4 @@
+# base: 59d5b37cce358e0d300392676d64191d3938608f
 --- a/code/build/soong/soong_ui.bash
 +++ b/code/build/soong/soong_ui.bash
 @@ -55,4 +55,5 @@
