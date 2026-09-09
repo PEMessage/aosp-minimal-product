@@ -1,10 +1,11 @@
 # base: 59d5b37cce358e0d300392676d64191d3938608f
+diff --git a/code/build/soong/soong_ui.bash b/code/build/soong/soong_ui.bash
+index c1c236b9d6f0bbbc95f7bed1f8c1889bd56ff73d..6ee16a2c119583060a292459d579340859a29ace 100755
 --- a/code/build/soong/soong_ui.bash
 +++ b/code/build/soong/soong_ui.bash
 @@ -55,4 +55,5 @@
  soong_build_go soong_ui android/soong/cmd/soong_ui
  
  cd ${TOP}
--exec "$(getoutdir)/soong_ui" "$@"
-+dlv --check-go-version=false exec --headless --api-version 2 --listen=:2345 "$(getoutdir)/soong_ui" -- "$@"
-+# exec "$(getoutdir)/soong_ui" "$@"
++# dlv --check-go-version=false exec --headless --api-version 2 --listen=:2345 "$(getoutdir)/soong_ui" -- "$@"
+ exec "$(getoutdir)/soong_ui" "$@"
