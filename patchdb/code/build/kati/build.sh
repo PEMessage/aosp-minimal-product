@@ -12,14 +12,23 @@
 # libc++ headers are picked up automatically by `-stdlib=libc++`
 # (<toolchain>/include/c++/v1), no -nostdinc++/-isystem wiring needed.
 #
-# Link-time notes (FHS env has no usable libstdc++/crt for the prebuilt
-# clang):
-#   LIBRARY_PATH=$TC/lib64    so `-lc++` resolves to the bundled libc++.so
-#   -B/-L <gcc-internal-dir>  crtbegin.o + libgcc.a come from the FHS gcc
-#                             (clang cannot auto-detect nix's gcc layout)
-#   -Wl,-rpath,$TC/lib64      so the binary finds libc++.so.1 at runtime
-#                             (same trick as the prebuilt: rpath to its own
-#                             lib64, see `ldd prebuilts/.../bin/ckati`)
+# Link-time notes:
+#   -fuse-ld=lld: same as soong (build/soong/cc/config/global.go passes it
+#     for device AND host). Without it the clang driver falls back to `ld`
+#     found on PATH — here the host binutils ld.bfd. The toolchain's own
+#     ld.lld sits next to clang, so no extra search path is needed.
+#   -Wl,-rpath,$TC/lib64: runtime lookup of the toolchain's libc++.so.1
+#     (same trick as the prebuilt ckati, which rpaths its own lib64).
+#     Everything else resolves via the conventional FHS layout:
+#       /usr/lib/gcc/<triple>/<ver>/  crtbegin.o + libgcc.a
+#                                     (flake.nix targetPkgs gcc.cc — note
+#                                     the plain `gcc` wrapper pkg does NOT
+#                                     merge its lib/gcc into the env)
+#       /usr/lib64                    crt1.o, crti.o (glibc.dev)
+#       /usr/include                  glibc headers (glibc.dev)
+#     The prebuilt clang itself ships no crt/libgcc — AOSP takes them from
+#     prebuilts/gcc/.../x86_64-linux-glibc2.17-4.8, a repo this minimal
+#     tree does not sync; the FHS gcc stands in for it.
 #
 # Everything else keeps the Makefile.ckati defaults: objects in ./out,
 # binary at ./ckati, flags -g -W -Wall -MMD -MP -O -DNOLOG -march=native.
@@ -46,15 +55,10 @@ if [[ ! -x "$TC/bin/clang++" ]]; then
     exit 1
 fi
 
-# FHS gcc internals: crtbegin.o / libgcc live inside the nix store and the
-# prebuilt clang cannot auto-detect that layout, hence the explicit -B/-L.
-GCCDIR="$(dirname "$(gcc -print-file-name=crtbegin.o)")"
-GLIB="$(dirname "$(gcc -print-file-name=libgcc_s.so)")"
-export LIBRARY_PATH="$TC/lib64"
-
 # NB: the target is $KATI_BIN_PATH/ckati = ./ckati (Makefile.ckati has no
 # bare "ckati" target; "ckati" and "./ckati" are different target names).
 cd "$DIR"
 make -f Makefile.ckati ./ckati \
+    -j 4 \
     KATI_CXX="$TC/bin/clang++ -stdlib=libc++" \
-    KATI_LD="$TC/bin/clang++ -stdlib=libc++ -B$GCCDIR -L$GCCDIR -L$GLIB -Wl,-rpath,$TC/lib64"
+    KATI_LD="$TC/bin/clang++ -stdlib=libc++ -fuse-ld=lld -Wl,-rpath,$TC/lib64"

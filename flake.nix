@@ -55,7 +55,9 @@
           # Development Libraries
           libxml2
           zlib  # libz.so.1 required by the prebuilt clang (build/kati/build.sh)
-          gcc  # crtbegin.o + libgcc for linking with the prebuilt clang
+          gcc.cc  # NOT the wrapper pkg: merge cc.out so /usr/lib/gcc/<triple>/<ver>
+                  # (crtbegin.o, libgcc.a) lands in the conventional FHS spot and
+                  # the prebuilt clang can auto-detect it (build/kati/build.sh)
           glibc.dev  # /usr/include (glibc headers) + crt1.o for the prebuilt clang
         ];
 
