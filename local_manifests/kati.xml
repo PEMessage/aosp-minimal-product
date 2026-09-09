@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local manifest: bring back the ckati sources (platform/build/kati).
+
+  Why a local manifest at all:
+    Android 11+ AOSP (and lineage-19.1) ship ckati ONLY as a prebuilt
+    (prebuilts/build-tools); no release manifest carries the kati repo
+    anymore. `path="build/kati"` + `name="platform/build/kati"` is the
+    classic Android 9/10 manifest entry, restored here.
+
+  Why an explicit revision (a SHA):
+    The `aosp` remote's default revision is refs/tags/android-12.1.0_r22,
+    which does not exist in build/kati (kati was dropped from release
+    manifests, so the repo has no android-12 release tags). Syncing with
+    only remote="aosp" would fail outright.
+
+  Why this SHA (9f48932c90ca, 2021-10-20, "Merge pull request #239"):
+    The prebuilt ckati carries kGitVersion="unknown" (built via soong,
+    not Makefile.ckati), so the compile-time commit is not recoverable.
+    Feature-string dating of the binary brackets its source to
+    2021-02-23 (.KATI_ALLOW_RULES present) .. 2021-10-25 (.SHELLSTATUS
+    absent). This commit is the last main-branch anchor before
+    .SHELLSTATUS, i.e. the newest source still consistent with the
+    prebuilt binary.
+
+  Why a separate remote (USTC instead of the default TUNA "aosp"):
+    TUNA rejects short-SHA fetches and queues full-SHA fetches behind a
+    600+ position slow queue; USTC serves full-SHA shallow fetches
+    directly. Only build/kati uses this remote; everything else stays on
+    TUNA.
+
+  Any source tweaks inside build/kati are managed with patchman and land
+  under patchdb/code/build/kati/ (see docs/patchman.md).
+
+  bootstrap.sh copies this file into $TOP/.repo/local_manifests/ (see
+  install_local_manifests) and syncs the path in sync_deps.
+-->
+<manifest>
+  <remote name="ustc-aosp"
+          fetch="https://mirrors.ustc.edu.cn/aosp/"
+          review="android-review.googlesource.com" />
+
+  <project path="build/kati"
+           name="platform/build/kati"
+           remote="ustc-aosp"
+           revision="9f48932c90ca93bc1777561cc22d1a2587bc0333"
+           groups="pdk,tradefed"
+           clone-depth="1" />
+</manifest>

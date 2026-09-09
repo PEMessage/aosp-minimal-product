@@ -91,6 +91,20 @@ init_tree() {
     runcmd mv "$TOP/.repo/manifests/default.xml.tuna" "$TOP/.repo/manifests/default.xml"
 }
 
+# Copy the outer repo's local manifests (e.g. local_manifests/kati.xml,
+# which brings back external/kati) into the repo workspace. Runs on every
+# invocation so updated manifests propagate to already-initialized trees;
+# repo picks them up on the next `repo sync`.
+install_local_manifests() {
+    title
+    [[ -d "$TOP/.repo" ]] || return 0
+    local xml
+    for xml in "$HERE"/local_manifests/*.xml; do
+        [[ -e "$xml" ]] || return 0
+        runcmd cp "$xml" "$TOP/.repo/local_manifests/"
+    done
+}
+
 sync_core() {
     title
     [[ -d "$TOP/build/soong" && -d "$TOP/prebuilts/build-tools" ]] && return 0
@@ -104,9 +118,11 @@ sync_deps() {
     # Repos soong analysis needs beyond build/ and prebuilts/.
     # external/golang-protobuf: soong_ui microfactory bootstrap.
     # external/starlark-go:     build/make/tools/rbcrun soong module.
+    # build/kati:               ckati sources (via local_manifests/kati.xml;
+    #                           tweaks are managed with patchman).
     # vendor/lineage:           envsetup + vendormk hooks (required, do not remove).
     local deps
-    deps="external/golang-protobuf external/starlark-go vendor/lineage"
+    deps="external/golang-protobuf external/starlark-go build/kati vendor/lineage"
     local missing=()
     for d in $deps; do [[ -d "$TOP/$d" ]] || missing+=("$d"); done
     [[ ${#missing[@]} -eq 0 ]] || runcmd repo sync -c -j "$JOBS" $LOCAL_ONLY "${missing[@]}"
@@ -149,6 +165,7 @@ main() {
     check_env
     ensure_repo
     init_tree
+    install_local_manifests
     sync_core
     sync_deps
     quarantine "$TOP/vendor/lineage/prebuilt"

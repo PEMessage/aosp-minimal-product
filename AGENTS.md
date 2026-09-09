@@ -90,6 +90,10 @@ device files:
   `build/core/` are symlinks)
 - `external/golang-protobuf` (soong_ui microfactory bootstrap)
 - `external/starlark-go` (`build/make/tools/rbcrun` soong module)
+- `build/kati` (ckati sources, added via `local_manifests/kati.xml`; the
+  lineage-19.1 manifest ships only the prebuilt ckati. Revision is a pinned
+  SHA on a USTC remote — see the file header for the full rationale.
+  Source tweaks are managed with patchman under `patchdb/code/build/kati/`)
 - `prebuilts/build-tools`, `prebuilts/go/linux-x86`, `prebuilts/jdk/jdk11`
   (ckati/ninja, go toolchain, Java 11)
 - `vendor/lineage` (required: `build/envsetup.sh` sources
