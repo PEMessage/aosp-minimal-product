@@ -54,6 +54,9 @@
 
           # Development Libraries
           libxml2
+          zlib  # libz.so.1 required by the prebuilt clang (build/kati/build.sh)
+          gcc  # crtbegin.o + libgcc for linking with the prebuilt clang
+          glibc.dev  # /usr/include (glibc headers) + crt1.o for the prebuilt clang
         ];
 
         profile = ''

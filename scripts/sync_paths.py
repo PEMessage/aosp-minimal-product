@@ -15,6 +15,7 @@ import sys
 # (clang and the legacy host gcc are NOT needed: nothing builds cc modules.)
 PREBUILT_ALLOW = {
     "prebuilts/build-tools",  # ckati, ninja, make, flex, bison, go
+    "prebuilts/clang/host/linux-x86",  # host clang for building ckati from source
     "prebuilts/go/linux-x86",  # go toolchain soong_ui bootstraps with
     "prebuilts/jdk/jdk11",  # Java 11 required by Android 12
 }

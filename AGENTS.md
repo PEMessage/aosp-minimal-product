@@ -94,8 +94,10 @@ device files:
   lineage-19.1 manifest ships only the prebuilt ckati. Revision is a pinned
   SHA on a USTC remote — see the file header for the full rationale.
   Source tweaks are managed with patchman under `patchdb/code/build/kati/`)
-- `prebuilts/build-tools`, `prebuilts/go/linux-x86`, `prebuilts/jdk/jdk11`
-  (ckati/ninja, go toolchain, Java 11)
+- `prebuilts/build-tools`, `prebuilts/go/linux-x86`, `prebuilts/jdk/jdk11`,
+  `prebuilts/clang/host/linux-x86`
+  (ckati/ninja, go toolchain, Java 11; clang = the Android 12 toolchain used
+  by `build/kati/build.sh` to rebuild ckati from source)
 - `vendor/lineage` (required: `build/envsetup.sh` sources
   `vendor/lineage/build/envsetup.sh` unconditionally)
 
