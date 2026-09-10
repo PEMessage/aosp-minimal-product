@@ -1,0 +1,23 @@
+# base: 9f48932c90ca93bc1777561cc22d1a2587bc0333
+diff --git a/code/build/kati/src/main.cc b/code/build/kati/src/main.cc
+index 417ec2c1d5cdb69cfe6c8ecd4d8fe63a0087da64..b92f0065a3f17c29e436a95cf454101a2bd3c9d5 100644
+--- a/code/build/kati/src/main.cc
++++ b/code/build/kati/src/main.cc
+@@ -353,7 +353,16 @@
+ }
+ 
+ int main(int argc, char* argv[]) {
+-  if (argc >= 2 && !strcmp(argv[1], "--realpath")) {
++  // Debug hook: when CKATI_WAIT_GDB is set, self-stop with SIGSTOP so a
++  // debugger can attach before any makefile work happens.
++  // Usage: CKATI_WAIT_GDB=1 <build cmd>, then: gdb <this ckati> -p <pid>.
++  bool realpath_mode = (argc >= 2 && !strcmp(argv[1], "--realpath"));
++  if (!realpath_mode && getenv("CKATI_WAIT_GDB")) {
++    fprintf(stderr, "[ckati] CKATI_WAIT_GDB: pid %d stopped (SIGSTOP); "
++                    "attach a debugger, then 'continue'\n", getpid());
++    raise(SIGSTOP);
++  }
++  if (realpath_mode) {
+     HandleRealpath(argc - 2, argv + 2);
+     return 0;
+   }

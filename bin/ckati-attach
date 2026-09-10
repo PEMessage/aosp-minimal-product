@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# Attach gdb to a ckati process that is stopped by the CKATI_WAIT_GDB hook.
+#
+# The hook lives in build/kati/src/main.cc
+# (patchdb/code/build/kati/src/main.cc.patch): with CKATI_WAIT_GDB set,
+# every real ckati run (dumpvars x2, kati build/package/cleanspec) raises
+# SIGSTOP before any makefile work.  build/kati/build.sh rebuilds ckati
+# with debug info and installs it over the prebuilt, which is what soong_ui
+# always execs.  This script is the other half: it polls for the stopped
+# process and hands it to gdb with the right symbol file.
+#
+#   terminal 1:  CKATI_WAIT_GDB=1 m nothing
+#   terminal 2:  bin/ckati-attach
+#
+# Usage:
+#   bin/ckati-attach             # poll for a stopped ckati, attach, done
+#   bin/ckati-attach --loop      # after each gdb session, wait for the next
+#                                # ckati (one `m nothing` runs it several times)
+#   bin/ckati-attach 12345       # attach to a given pid
+#
+# yama note: kernel.yama.ptrace_scope=1 (many distros' default) denies
+# non-root attach unless the tracer is the tracee's parent; soong_ui is,
+# gdb is not.  Open it once per boot
+#     sudo sysctl kernel.yama.ptrace_scope=0
+# (NixOS: persist via boot.kernel.sysctl in flake.nix), or run this script
+# under sudo.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The build.sh output.  Same binary as the installed one (hash-checked
+# below); preferred over the installed path because its DWARF points back
+# into code/build/kati/src, so gdb shows real source paths.
+CKATI_DEBUG_BIN="$HERE/code/build/kati/ckati"
+
+need() { command -v "$1" >/dev/null || die "missing: $1"; }
+die()  { echo "error: $*" >&2; exit 1; }
+notice() { echo "[ckati-attach] $*" >&2; }
+
+usage() { sed -n '/^# Usage:/,/^# yama/p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# -- steps -----------------------------------------------------------------
+
+# --loop / pid argument parsing.  Sets $LOOP and $PID.
+parse_args() {
+    LOOP=0
+    PID=""
+    while (( $# )); do
+        case "$1" in
+            --loop)    LOOP=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *)         PID="$1" ;;
+        esac
+        shift
+    done
+}
+
+# ptrace_scope=1 + non-root => attach will most likely be denied.  Warn up
+# front instead of letting gdb fail cryptically.
+check_yama() {
+    [[ -r /proc/sys/kernel/yama/ptrace_scope ]] || return 0
+    if [[ "$(cat /proc/sys/kernel/yama/ptrace_scope)" != "0" ]] &&
+       (( EUID != 0 )); then
+        notice "note: kernel.yama.ptrace_scope=1 and you are not root;"
+        notice "      if attach is denied: sudo sysctl kernel.yama.ptrace_scope=0"
+    fi
+}
+
+# Block until a ckati process exists; print its pid.  With CKATI_WAIT_GDB
+# set, the first one found is SIGSTOPped inside main(), so there is no
+# attach race (see docs/patchman.md sibling notes in AGENTS.md).
+wait_for_ckati() {
+    local p
+    while :; do
+        p="$(pgrep -x ckati | head -1 || true)"
+        if [[ -n "$p" ]]; then
+            echo "$p"
+            return 0
+        fi
+        sleep 0.2
+    done
+}
+
+# Resolve the symbol file gdb should load: the build.sh output when the
+# running binary matches it, else the running executable itself.
+pick_symfile() {
+    local pid="$1" exe h_run h_dbg
+    exe="$(readlink "/proc/$pid/exe")" || die "pid $pid is gone"
+    h_run="$(sha256sum "$exe" | cut -d' ' -f1)"
+    h_dbg="$(sha256sum "$CKATI_DEBUG_BIN" 2>/dev/null | cut -d' ' -f1 || true)"
+    if [[ "$h_dbg" != "" && "$h_run" == "$h_dbg" ]]; then
+        echo "$CKATI_DEBUG_BIN"
+    else
+        echo "$exe"
+    fi
+}
+
+attach() {
+    local pid="$1" sym
+    sym="$(pick_symfile "$pid")"
+    if ! readelf -S "$sym" | grep -q '\.debug_info'; then
+        notice "warning: $sym has no .debug_info"
+        notice "         rebuild first: (cd code/build/kati && ./build.sh)"
+    fi
+    notice "gdb $sym -p $pid"
+    gdb "$sym" -p "$pid"
+}
+
+# -- main ------------------------------------------------------------------
+
+main() {
+    parse_args "$@"
+    need gdb
+    need pgrep
+    need readelf
+    check_yama
+
+    if [[ -z "$PID" ]]; then
+        notice "waiting for a ckati process ... (Ctrl+C to abort)"
+        PID="$(wait_for_ckati)"
+    fi
+
+    while :; do
+        attach "$PID" || true
+        PID=""
+        (( LOOP )) || return 0
+        notice "--loop: waiting for the next ckati ..."
+        PID="$(wait_for_ckati)"
+    done
+}
+
+main "$@"

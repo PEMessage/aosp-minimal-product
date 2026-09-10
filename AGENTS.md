@@ -80,6 +80,33 @@ same dir as the prebuilt go binary, so one PATH entry covers go + gopls + dlv:
 eval "$(./scripts/setup_go_tools.sh --print-path)"
 ```
 
+### Debugging ckati (gdb)
+
+Every ckati invocation (dumpvars x2, kati build/package/cleanspec) execs
+`prebuilts/build-tools/linux-x86/bin/ckati`. A `CKATI_WAIT_GDB` hook in
+`build/kati/src/main.cc` (managed as
+`patchdb/code/build/kati/src/main.cc.patch`) makes ckati SIGSTOP itself
+before any makefile work when that env var is set; `build/kati/build.sh`
+rebuilds ckati with debug info and installs it over the prebuilt (stock
+copy kept as `ckati.prebuilt.bak`; `repo sync prebuilts/build-tools`
+restores it).
+
+```sh
+# terminal 1 (FHS shell):
+cd code/build/kati && ./build.sh          # rebuild + install debug ckati
+cd ../.. && source build/envsetup.sh && lunch lineage_minimum-eng
+CKATI_WAIT_GDB=1 m nothing                # each ckati stops itself at startup
+
+# terminal 2:
+bin/ckati-attach          # attach to the stopped ckati (--loop to catch them all)
+```
+
+yama: non-root attach is denied while `kernel.yama.ptrace_scope=1`; run
+`sudo sysctl kernel.yama.ptrace_scope=0` once per boot (persist via
+`boot.kernel.sysctl` in flake.nix) or run `bin/ckati-attach` under sudo.
+Never leave `CKATI_WAIT_GDB=1` set for unattended builds — every ckati run
+will block. `ckati --realpath` is never stopped.
+
 ## Minimal repo set
 
 The entire tree needed for a green `m nothing` is only nine repos plus the

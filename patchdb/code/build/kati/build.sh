@@ -62,3 +62,18 @@ make -f Makefile.ckati ./ckati \
     -j 4 \
     KATI_CXX="$TC/bin/clang++ -stdlib=libc++" \
     KATI_LD="$TC/bin/clang++ -stdlib=libc++ -fuse-ld=lld -Wl,-rpath,$TC/lib64"
+
+# Install into prebuilts: soong_ui always execs
+# prebuilts/build-tools/linux-x86/bin/ckati (PrebuiltBuildTool), there is no
+# rebuild-from-source path in build/make, so the debug build must land there.
+# The stock prebuilt is backed up once; restore with
+#   cp prebuilts/build-tools/linux-x86/bin/ckati.prebuilt.bak \
+#      prebuilts/build-tools/linux-x86/bin/ckati
+# (a `repo sync prebuilts/build-tools` also restores it, since prebuilts is
+# its own git repo — re-run this script afterwards).
+DEST="$TOP/prebuilts/build-tools/linux-x86/bin/ckati"
+if [[ ! -f "$DEST.prebuilt.bak" ]]; then
+    cp -p "$DEST" "$DEST.prebuilt.bak"
+fi
+install -m 0755 ckati "$DEST"
+echo "installed: $DEST (stock prebuilt kept at $DEST.prebuilt.bak)"
