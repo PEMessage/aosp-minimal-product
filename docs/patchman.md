@@ -66,6 +66,39 @@ Two details worth knowing:
   directory layout is the whole state, and a patch's mode is derivable
   from whether the stored file ends in `.patch`.
 
+## Config and aliases
+
+`patchdb/config` is an INI file (Python's `configparser`) laid out like a
+small `.git/config`: `section.key` names, with `[alias]` understood by
+patchman.  It is **created on first use**, is never treated as a stored entry,
+and is reported by `verify` if it cannot be parsed.
+
+```sh
+patchman config alias.st status                    # set
+patchman config alias.s  'status --porcelain'
+patchman config alias.co reset
+patchman config alias.who '!git log -1 --oneline'  # ! runs a shell command
+
+patchman config alias.st        # get one value (exit 1 if unset)
+patchman config alias           # list one section
+patchman config --list          # list everything: name=value
+patchman config --unset alias.co
+patchman config -e              # edit in $EDITOR / core.editor
+```
+
+Aliases expand exactly like git's: the leading word is replaced by the alias
+body and the remaining arguments are appended.
+
+```sh
+patchman s -- .        # == patchman status --porcelain -- .
+patchman who           # runs `git log -1 --oneline`
+```
+
+A `!` body runs through `sh -c '<body> "$@"'`, so `$1`, `$@`, ... see the
+extra arguments.  Cycles (`alias.a = b`, `alias.b = a`) are reported, never
+recursed.  Edit-time editor resolution is `$PATCHMAN_EDITOR`, then
+`core.editor`, then `$VISUAL`, `$EDITOR`, finally `vi`.
+
 ## What this repo stores
 
 Both modes are in use here:
@@ -99,13 +132,18 @@ patchman add --mode copy build.sh     # whole-file copy
 
 patchman status                        # human table: every stored patch's state
 patchman status --porcelain            # machine-readable: rel<TAB>state
+patchman status -- .                   # only the current directory's subtree
+patchman status -- code/build code/device/minimum   # several pathspecs
 patchman cat envsetup.sh               # dump a stored patch to stdout
 
 patchman apply                          # apply everything
 patchman apply code/build/blueprint     # apply a subtree (or a single file path)
+patchman apply -- .                     # apply the cwd subtree only
 patchman reset                          # unapply everything (restore git state)
 patchman reset code/build.sh            # (checkout is an alias of reset)
 
+patchman config alias.st status         # store an alias (see Config and aliases)
+patchman st --porcelain                 # ... and use it
 patchman verify                         # fsck-style consistency check of patchdb
 patchman rm code/build.sh               # stop tracking a patch
 patchman root                           # print detected root
@@ -113,13 +151,17 @@ patchman root                           # print detected root
 
 Notes
 
-* `apply`/`reset`/`status` accept a directory **or a single stored
-  file path**; all paths are resolved from the current directory, and a
-  rooted lookup like `status patchdb/code/build` is accepted too.
+* `apply`/`reset`/`status` accept zero or more **pathspecs**: directories or
+  single stored files.  Paths are resolved from the current directory, and a
+  rooted lookup like `status patchdb/code/build` is accepted too.  Use `--` to
+  separate pathspecs from options (`status --porcelain -- .`), exactly as with
+  git; `.` means the current directory's subtree.
 * `status` uses `patch --dry-run` (with `-N`) so it never writes `.rej`
-  files and correctly distinguishes applied / not applied / conflict.
+  files and correctly distinguishes applied / not applied / conflict.  A
+  tracked copy-mode entry whose target still equals its `.orig` baseline is
+  "not applied", not "conflict".
 * `verify` checks for orphan `.orig` baselines, unparseable patch files,
-  stored entries whose source file is gone, and any leftover legacy
-  `.patchman.json`; it exits non-zero on any problem.
+  stored entries whose source file is gone, a malformed `patchdb/config`, and
+  any leftover legacy `.patchman.json`; it exits non-zero on any problem.
 * `patchman` itself needs no FHS container: it only shells out to `git`,
   `diff` and `patch`.

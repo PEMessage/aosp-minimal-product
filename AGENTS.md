@@ -70,15 +70,19 @@ debug tweaks are applied on demand.
 
 ```sh
 bin/patchman status                 # every stored entry and its state
-bin/patchman apply  [path]          # apply all, or a subtree/file
-bin/patchman reset  [path]          # revert (alias: checkout)
+bin/patchman status -- .            # ... restricted to the cwd subtree
+bin/patchman apply  [path ...]      # apply all, or a pathspec
+bin/patchman reset  [path ...]      # revert (alias: checkout)
 bin/patchman add [-m copy] <file>   # record the current file
 bin/patchman cat <file>             # dump the stored entry
 bin/patchman rm <file>              # stop tracking it
+bin/patchman config ...             # read/write patchdb/config; set aliases
 bin/patchman verify                 # consistency check (fsck)
 ```
 
-Typical loop for a patchman-owned file: edit it in `code/`, then
+`patchdb/config` is an optional INI file created on first `config` write; it
+holds git-style aliases (`patchman config alias.st status` makes `patchman st`
+work). Typical loop for a patchman-owned file: edit it in `code/`, then
 `bin/patchman add [-m copy] <file>` to refresh the stored copy, then re-run the
 build.
 

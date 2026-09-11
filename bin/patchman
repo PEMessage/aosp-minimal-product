@@ -1,211 +1,407 @@
 #!/usr/bin/env python3
-"""patchman -- manage per-file patches against a working tree.
+"""patchman -- per-file patch management for a tree that owns a patchdb/.
 
-Model: three trees (git-style)
-------------------------------
-Every decision is a three-way comparison::
+The whole design in one screen
+==============================
 
-    pristine --<-- actual (working-tree file)
-        ^          ^
-        |          |
-        +--<-- stored (patchdb/ entry)
+Three trees
+-----------
 
-* pristine -- the upstream baseline: the owning git repo's ``HEAD:<file>``
-  content, or nothing for a file git never tracked.
-* actual   -- what the file looks like in the working tree right now.
-* stored   -- what patchman recorded: a unified diff (patch mode) or a
-  whole-file copy (copy mode).
+Every question patchman answers is a three-way comparison::
 
-Three states fall out of the comparison:
+    pristine  what upstream had        <- the owning repo's HEAD:<file>
+       |
+       v
+    actual    what the filesystem has  <- the working-tree file
+       ^
+       |
+    stored    what patchdb/ recorded   <- a diff or a whole-file copy
 
-    applied       stored matches actual
-    not applied   actual matches pristine
-    conflict      actual matches neither
+and the three states follow directly::
 
-Storage layout
+    applied       stored == actual     the recorded change is in place
+    not applied   actual == pristine   the tree is pristine
+    conflict      neither              the tree drifted from both
+
+Vocabulary
+----------
+
+    Entry    a stored item: source path, storage mode, and its file
+    Mode     how one entry is stored / classified / applied / reset
+             (the ``patch`` and ``copy`` strategies)
+    State    applied | not applied | conflict
+    Change   the result of apply/reset, rendered by one formatter
+
+Layout
+------
+
+The directory that *contains* a ``patchdb/`` is the **root**.  Commands find it
+by walking up from the current directory (``$PATCHDB`` overrides, like
+``$GIT_DIR``).  Stored paths mirror source paths relative to the root::
+
+    <root>/code/build/foo/bar.c                  source file
+    <root>/patchdb/code/build/foo/bar.c.patch    patch mode (git-style diff)
+    <root>/patchdb/code/build/foo/bar.c          copy mode (whole file)
+    <root>/patchdb/.orig/code/build/foo/bar.c    copy-mode baseline
+    <root>/patchdb/config                        settings (INI, created on demand)
+
+Modes
+-----
+
+* **patch** -- a git-style unified diff of the tree file against the owning
+  repo's ``HEAD`` (or ``/dev/null`` for a brand-new file); applied with GNU
+  ``patch -p1``.
+* **copy**  -- the file verbatim, plus a ``.orig`` baseline when the source is
+  git-tracked so ``reset`` can restore it.
+
+Config and aliases
+------------------
+
+``patchdb/config`` is an INI file (``configparser``) addressed with git-style
+``section.key`` names.  The only setting patchman interprets is ``[alias]``;
+everything else is stored verbatim for the user::
+
+    [alias]
+    st = status
+    co = reset
+    lg = status --porcelain
+    who = !git log -1 --oneline
+
+An alias expands like git's: the leading word is replaced by the alias body,
+arguments are appended, ``!`` bodies run through a shell, and loops are
+reported instead of recursing forever.  ``patchman config`` reads and writes
+the file; it is created the first time a value is set.
+
+Command layers
 --------------
-The directory that *contains* a ``patchdb/`` folder is the working-tree
-root.  All commands discover it by walking up from the current directory
-(git-style), or honour ``$PATCHDB`` as an override (git's ``$GIT_DIR``
-analogue).  Stored entries mirror source paths relative to the root::
 
-    <root>/code/build/foo/bar.c                 (source)
-    <root>/patchdb/code/build/foo/bar.c.patch   (patch mode: git-style diff)
-    <root>/patchdb/code/build/foo/bar.c         (copy mode: whole-file copy)
-    <root>/patchdb/.orig/code/build/foo/bar.c   (baseline for copy-mode reset)
-
-Two modes
----------
-* patch mode -- unified diff against the pristine baseline, emitted in the
-  ``git diff`` format (``diff --git`` + ``index`` lines; the patch header
-  may carry a ``# base: <sha>`` comment).  Apply/checkout run GNU
-  ``patch -d ROOT -p1``; because the header is git-style, the same file can
-  be cross-checked with ``git apply --check``.
-* copy mode  -- the whole file verbatim.  ``reset`` restores the recorded
-  ``.orig`` baseline (git HEAD at add time), or deletes the file if it was
-  brand-new.
-
-Command layers (git-style porcelain / plumbing)
------------------------------------------------
-``patchman --help`` groups the subcommands accordingly.
+Porcelain commands are the user-facing verbs, plumbing commands are small
+scriptable primitives; ``patchman --help`` lists both.
 """
 
 import argparse
+import configparser
+import enum
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 PROG = "patchman"
 PATCHDB_DIRNAME = "patchdb"
+CONFIG_NAME = "config"
 ORIG_DIRNAME = ".orig"
-MANIFEST = ".patchman.json"  # legacy bookkeeping; verify() complains if present
+MANIFEST = ".patchman.json"          # legacy bookkeeping; verify() flags it
+CONFIG_TMP = CONFIG_NAME + ".tmp"    # transient during an atomic config write
+RESERVED = {CONFIG_NAME, CONFIG_TMP, MANIFEST}   # never stored entries
 # git blob object id of the empty file: sha1("blob 0\0")
 EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
 
 
-def die(msg: str) -> None:
-    print(f"{PROG}: error: {msg}", file=sys.stderr)
-    sys.exit(1)
+class State(enum.StrEnum):
+    """The three-way state of an entry (see the module docstring)."""
+
+    APPLIED = "applied"
+    NOT_APPLIED = "not applied"
+    CONFLICT = "conflict"
 
 
-def msg(*a) -> None:
-    print(*a)
+class PatchmanError(Exception):
+    """Any expected failure, raised by ``die`` and reported by ``main``."""
 
 
-# -- resolve ---------------------------------------------------------------
+# =====================================================================
+# tiny helpers
+# =====================================================================
+
+def die(message: str) -> None:
+    raise PatchmanError(message)
+
+
+def note(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+# =====================================================================
+# config: patchdb/config, an INI file with git-flavoured names
+# =====================================================================
+
+class Config:
+    """The ``patchdb/config`` file.
+
+    Keys are addressed as ``section.key`` (``alias.st``, ``core.editor``, ...).
+    Values are opaque to patchman except for ``alias.*``.  A missing file is an
+    empty config; the first ``set`` creates it.  A malformed file does not crash
+    ordinary commands -- it disables aliases and is reported by ``verify``.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.error: str | None = None
+        self.parser = configparser.ConfigParser(interpolation=None)
+        self._load()
+
+    # -- reading -------------------------------------------------------
+
+    def _load(self) -> None:
+        if not self.path.is_file():
+            return
+        try:
+            with self.path.open(encoding="utf-8") as fh:
+                self.parser.read_file(fh)
+        except (OSError, configparser.Error) as exc:
+            self.error = str(exc)
+
+    @staticmethod
+    def split(name: str) -> tuple[str, str | None]:
+        """``alias.st`` -> ``("alias", "st")``; ``alias`` -> ``("alias", None)``."""
+        section, dot, key = name.partition(".")
+        return section, (key if dot else None)
+
+    def get(self, name: str) -> str | None:
+        self._check()
+        section, key = self.split(name)
+        if key is None or not self.parser.has_section(section):
+            return None
+        return self.parser.get(section, key, fallback=None)
+
+    def section(self, name: str) -> list[tuple[str, str]]:
+        self._check()
+        if not self.parser.has_section(name):
+            return []
+        return [(key, self.parser.get(name, key))
+                for key in self.parser.options(name)]
+
+    def items(self) -> list[tuple[str, str]]:
+        """Every key as ``("section.key", value)``, file order preserved."""
+        self._check()
+        return [(f"{section}.{key}", self.parser.get(section, key))
+                for section in self.parser.sections()
+                for key in self.parser.options(section)]
+
+    # -- alias lookup (tolerant: a broken file just means no aliases) ---
+
+    def alias(self, name: str) -> str | None:
+        if self.error:
+            return None
+        return self.get("alias." + name)
+
+    # -- writing -------------------------------------------------------
+
+    def set(self, name: str, value: str) -> None:
+        self._check()
+        section, key = self.split(name)
+        if key is None:
+            die(f"invalid key {name!r}: expected section.key")
+        if not self.parser.has_section(section):
+            self.parser.add_section(section)
+        self.parser.set(section, key, value)
+        self._save()
+
+    def unset(self, name: str) -> bool:
+        self._check()
+        section, key = self.split(name)
+        if key is None or not self.parser.has_section(section):
+            return False
+        removed = self.parser.remove_option(section, key)
+        if removed and not self.parser.options(section):
+            self.parser.remove_section(section)
+        self._save()
+        return removed
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(CONFIG_TMP)
+        with tmp.open("w", encoding="utf-8") as fh:
+            self.parser.write(fh)
+        tmp.replace(self.path)
+        self.error = None
+
+    def _check(self) -> None:
+        if self.error:
+            die(f"cannot read {self.path}: {self.error}")
+
+
+# =====================================================================
+# discovery: root, patchdb, and the owning git repository
+# =====================================================================
+
+def patchdb_override() -> Path | None:
+    """The resolved ``$PATCHDB`` (git's ``$GIT_DIR`` analogue), or None."""
+    env = os.environ.get("PATCHDB")
+    if not env:
+        return None
+    path = Path(env).expanduser().resolve()
+    if not path.is_dir():
+        die(f"PATCHDB={env}: not a directory")
+    return path
+
 
 def find_root() -> Path | None:
-    """Working-tree root = the directory directly containing a patchdb/.
-
-    ``$PATCHDB`` (git's ``$GIT_DIR`` analogue) bypasses the walk entirely:
-    the root is taken as the directory that *contains* the given folder.
-    """
-    env = os.environ.get("PATCHDB")
-    if env:
-        p = Path(env).expanduser().resolve()
-        if not p.is_dir():
-            die(f"PATCHDB={env}: not a directory")
-        return p.parent
-    d = Path.cwd()
+    """The directory directly containing ``patchdb/`` (walk up from cwd)."""
+    override = patchdb_override()
+    if override:
+        return override.parent
+    directory = Path.cwd()
     while True:
-        if (d / PATCHDB_DIRNAME).is_dir():
-            return d
-        if d.parent == d:
+        if (directory / PATCHDB_DIRNAME).is_dir():
+            return directory
+        if directory.parent == directory:
             return None
-        d = d.parent
+        directory = directory.parent
 
 
 def patchdb_dir(root: Path) -> Path:
-    """The patchdb directory for ``root`` (``$PATCHDB`` wins if set)."""
-    env = os.environ.get("PATCHDB")
-    if env:
-        return Path(env).expanduser().resolve()
-    return root / PATCHDB_DIRNAME
+    return patchdb_override() or (root / PATCHDB_DIRNAME)
 
 
-def require_root(extra: str = "") -> Path:
-    root = find_root()
-    if root is None:
-        die("no patchdb/ found above the current directory" + extra)
-    return root
+@dataclass(frozen=True)
+class Context:
+    """Everything a command needs to act: the root, the patchdb and its config."""
+
+    root: Path
+    patchdb: Path
+    config: Config
+
+    @classmethod
+    def from_root(cls, root: Path) -> "Context":
+        patchdb = patchdb_dir(root)
+        return cls(root, patchdb, Config(patchdb / CONFIG_NAME))
+
+    @classmethod
+    def discover(cls) -> "Context":
+        root = find_root()
+        if root is None:
+            die("no patchdb/ found above the current directory "
+                "(run `mkdir patchdb/` first)")
+        return cls.from_root(root)
+
+    @classmethod
+    def try_discover(cls) -> "Context | None":
+        """Like :meth:`discover` but returns None when there is no root.
+
+        Used before argument parsing so aliases resolve, without making
+        ``--help`` fail outside a tree.
+        """
+        root = find_root()
+        return cls.from_root(root) if root is not None else None
 
 
-def src_rel(root: Path, path: str) -> str:
-    """Cwd-relative ``path`` -> tree-relative path with '/' separators."""
-    p = os.path.abspath(path)
-    rel = os.path.relpath(p, root)
+# =====================================================================
+# paths: tree-relative names, pathspecs, stored entries
+# =====================================================================
+
+def tree_rel(root: Path, path: str) -> str:
+    """``path`` (cwd-relative) -> tree-relative, '/' separated; die if outside."""
+    rel = os.path.relpath(os.path.abspath(path), root)
     if rel == ".." or rel.startswith("../"):
         die(f"{path} lies outside the root {root}")
     return rel
 
 
-def clip_arg(root: Path, arg: str) -> str:
-    """Turn a CLI dir/file argument into a patchdb-relative sub path.
+def normalize_pathspec(root: Path, arg: str) -> str:
+    """A CLI path argument -> a patchdb-relative prefix.
 
-    Accepts tree-relative paths (``code/build``) or already-patchdb-relative
-    ones (``patchdb/code/build``).  Empty string means the whole patchdb.
+    Accepts tree-relative (``code/build``) or patchdb-relative
+    (``patchdb/code/build``) forms.  ``.`` / the root itself normalise to the
+    empty prefix, which matches every entry.
     """
-    if not arg:
+    rel = tree_rel(root, arg)
+    if rel in (".", PATCHDB_DIRNAME):
         return ""
-    rel = src_rel(root, arg)
-    if rel == PATCHDB_DIRNAME or rel.startswith(PATCHDB_DIRNAME + "/"):
-        rel = rel[len(PATCHDB_DIRNAME) + 1:]
-    return rel
+    prefix = PATCHDB_DIRNAME + "/"
+    if rel.startswith(prefix):
+        rel = rel[len(prefix):]
+    return rel.rstrip("/")
 
 
-# -- layout: stored paths are derived here and only here -----------------
+@dataclass(frozen=True)
+class Entry:
+    """One stored item: source path, storage mode, and its file under patchdb/."""
 
-def target_path(root: Path, rel: str) -> Path:
-    return root / rel
+    rel: str
+    mode: "Mode"
+    stored: Path
 
-
-def patch_path(pdb: Path, rel: str) -> Path:
-    return pdb / (rel + ".patch")
-
-
-def copy_path(pdb: Path, rel: str) -> Path:
-    return pdb / rel
+    def target(self, root: Path) -> Path:
+        return root / self.rel
 
 
-def orig_path(pdb: Path, rel: str) -> Path:
-    return pdb / ORIG_DIRNAME / rel
+@dataclass(frozen=True)
+class Change:
+    """The outcome of apply/reset: a mark, the entry, and a short note."""
+
+    mark: str
+    entry: Entry
+    note: str
 
 
-def list_stored(pdb: Path, sub: str = "") -> list:
-    """[(rel, mode, stored_path)] sorted by rel.
+def report(changes) -> None:
+    """Print a stream of Changes, one per line."""
+    for change in changes:
+        print(f"  {change.mark} {change.entry.rel} ({change.note})")
 
-    ``sub`` is a patchdb-relative path: either a directory (all entries
-    below it) or a single stored file (``name`` or ``name.patch``).
-    """
-    base = pdb / sub if sub else pdb
-    if base.is_dir():
-        entries = []
-        for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = [d for d in dirnames if d != ORIG_DIRNAME]
-            for fn in filenames:
-                full = Path(dirpath) / fn
-                rel = full.relative_to(pdb).as_posix()
-                if rel == MANIFEST:
-                    continue
-                if rel.endswith(".patch"):
-                    entries.append((rel[:-6], "patch", full))
-                else:
-                    entries.append((rel, "copy", full))
-        entries.sort()
-    elif sub:
-        # one stored file: could be a copy entry or a `name.patch`
-        entries = []
-        for cand, mode in ((pdb / sub, "copy"), (pdb / (sub + ".patch"), "patch")):
-            if cand.is_file():
-                entries.append((sub, mode, cand))
-    else:
-        entries = []
+
+def all_entries(patchdb: Path) -> list[Entry]:
+    """Every stored entry, sorted by source path (``.orig`` and config skipped)."""
+    if not patchdb.is_dir():
+        return []
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(patchdb):
+        dirnames[:] = [d for d in dirnames if d != ORIG_DIRNAME]
+        for filename in filenames:
+            stored = Path(dirpath) / filename
+            stored_rel = stored.relative_to(patchdb).as_posix()
+            if stored_rel in RESERVED:
+                continue
+            mode = mode_for(stored_rel)
+            entries.append(Entry(mode.source_name(stored_rel), mode, stored))
+    entries.sort(key=lambda entry: entry.rel)
     return entries
 
 
-# -- baseline: the owning git repo's HEAD content --------------------------
+def matches(entry: Entry, spec: str) -> bool:
+    """True when ``spec`` (a normalized prefix) selects ``entry``.
 
-def run_git(args: list, repo: Path | None = None) -> subprocess.CompletedProcess:
-    cmd = ["git"]
-    if repo is not None:
-        cmd += ["-C", str(repo)]
-    cmd += args
+    Both of an entry's names are accepted: its source path and its stored path
+    (``foo.c`` and ``foo.c.patch`` in patch mode).
+    """
+    if not spec:
+        return True
+    names = (entry.rel, entry.mode.stored_name(entry.rel))
+    return any(name == spec or name.startswith(spec + "/") for name in names)
+
+
+def select(context: Context, pathspecs: list[str]) -> list[Entry]:
+    """The entries under every pathspec (all entries when none are given)."""
+    specs = [normalize_pathspec(context.root, spec) for spec in pathspecs] or [""]
+    return [entry for entry in all_entries(context.patchdb)
+            if any(matches(entry, spec) for spec in specs)]
+
+
+# =====================================================================
+# baseline: the owning git repository and its HEAD content
+# =====================================================================
+
+def run_git(args: list[str], repo: Path | None = None) -> subprocess.CompletedProcess:
+    cmd = ["git"] + (["-C", str(repo)] if repo else []) + args
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
 def find_git_repo(path: Path) -> Path | None:
-    """Innermost git repository containing ``path`` (walk up from its dir)."""
-    d = path.resolve().parent
+    """Innermost git repository containing ``path`` (walk up from its parent)."""
+    directory = path.resolve().parent
     while True:
-        if (d / ".git").is_dir():
-            return d
-        if d.parent == d:
+        if (directory / ".git").is_dir():
+            return directory
+        if directory.parent == directory:
             return None
-        d = d.parent
+        directory = directory.parent
 
 
 def git_tracked(repo: Path, rel: str) -> bool:
@@ -213,59 +409,79 @@ def git_tracked(repo: Path, rel: str) -> bool:
 
 
 def git_head_content(repo: Path, rel: str) -> bytes | None:
-    r = run_git(["show", "HEAD:" + rel], repo)
-    if r.returncode != 0:
-        return None
-    return r.stdout.encode()
+    result = run_git(["show", "HEAD:" + rel], repo)
+    return result.stdout.encode() if result.returncode == 0 else None
 
 
 def git_head_sha(repo: Path) -> str | None:
-    r = run_git(["rev-parse", "HEAD"], repo)
-    return r.stdout.strip() if r.returncode == 0 else None
+    result = run_git(["rev-parse", "HEAD"], repo)
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
-# -- content helpers -------------------------------------------------------
+@dataclass(frozen=True)
+class Baseline:
+    """The pristine content (and commit) that a stored entry diffs against."""
+
+    data: bytes
+    commit: str | None
+
+    @classmethod
+    def of(cls, source: Path) -> "Baseline | None":
+        """HEAD content for ``source``, or None when git never tracked it."""
+        repo = find_git_repo(source)
+        if repo is None:
+            return None
+        rel = os.path.relpath(os.path.realpath(source), repo)
+        if not git_tracked(repo, rel):
+            return None
+        data = git_head_content(repo, rel)
+        if data is None:
+            return None
+        return cls(data, git_head_sha(repo))
+
+
+# =====================================================================
+# content helpers
+# =====================================================================
 
 def is_binary(path: Path) -> bool:
-    with open(path, "rb") as f:
-        return b"\x00" in f.read(1024)
+    with open(path, "rb") as fh:
+        return b"\x00" in fh.read(1024)
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def is_same(a: Path, b: Path) -> bool:
-    return _sha256(a) == _sha256(b)
+    return a.stat().st_size == b.stat().st_size and sha256(a) == sha256(b)
 
 
 def git_blob_sha(data: bytes) -> str:
-    """Blob object id for raw content — git's object format
-    ``'blob <len>\\0' + data`` hashed with SHA-1, i.e. exactly what
-    ``git hash-object`` computes, without needing a repository."""
+    """Blob object id for raw content -- what ``git hash-object`` computes."""
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
-# -- diff generation (git-style header) --------------------------------
+# =====================================================================
+# diff generation (git-style header, GNU patch applies it)
+# =====================================================================
 
 def diff_vs_baseline(root: Path, rel: str, pristine: bytes | None) -> str | None:
     """Git-style unified diff of the tree file vs ``pristine``; None if equal.
 
-    The header mirrors ``git diff`` output (``diff --git``, ``index``,
-    ``new file mode``) so the stored patch can be cross-checked with
-    ``git apply --check``; GNU patch stays the apply engine.
+    The header mirrors ``git diff`` (``diff --git``, ``index``, ``new file
+    mode``) so the stored patch can be cross-checked with ``git apply --check``.
     """
-    src = target_path(root, rel)
-    mode = "100755" if src.stat().st_mode & 0o111 else "100644"
+    source = root / rel
+    mode = "100755" if source.stat().st_mode & 0o111 else "100644"
     if pristine is None:
-        # brand-new file: diff against /dev/null
-        r = subprocess.run(
+        result = subprocess.run(
             ["diff", "-u", "--label", os.devnull, "--label", "b/" + rel,
-             os.devnull, str(src)],
+             os.devnull, str(source)],
             capture_output=True, text=True)
         h1 = EMPTY_BLOB
     else:
@@ -273,300 +489,465 @@ def diff_vs_baseline(root: Path, rel: str, pristine: bytes | None) -> str | None
         with os.fdopen(fd, "wb") as fh:
             fh.write(pristine)
         try:
-            r = subprocess.run(
+            result = subprocess.run(
                 ["diff", "-u", "--label", "a/" + rel, "--label", "b/" + rel,
-                 tmp, str(src)],
+                 tmp, str(source)],
                 capture_output=True, text=True)
         finally:
             os.unlink(tmp)
         h1 = git_blob_sha(pristine)
-    if r.returncode == 0:
+
+    if result.returncode == 0:
         return None
-    if r.returncode not in (0, 1):
-        die("diff failed: " + (r.stderr.strip() or r.stdout.strip()))
-    h2 = git_blob_sha(src.read_bytes())
+    if result.returncode not in (0, 1):
+        die("diff failed: " + (result.stderr.strip() or result.stdout.strip()))
+
+    h2 = git_blob_sha(source.read_bytes())
     if pristine is None:
-        header = f"diff --git a/{rel} b/{rel}\nnew file mode {mode}\nindex 0000000..{h2}\n"
+        header = (f"diff --git a/{rel} b/{rel}\n"
+                  f"new file mode {mode}\n"
+                  f"index 0000000..{h2}\n")
     else:
-        header = f"diff --git a/{rel} b/{rel}\nindex {h1}..{h2} {mode}\n"
-    return header + r.stdout
+        header = (f"diff --git a/{rel} b/{rel}\n"
+                  f"index {h1}..{h2} {mode}\n")
+    return header + result.stdout
 
 
-# -- apply engine and three-state classification (GNU patch) ---------------
+# =====================================================================
+# engine primitives: GNU patch and its classification
+# =====================================================================
 
 def run_patch(root: Path, patchfile: Path, reverse: bool = False,
               dry: bool = False) -> subprocess.CompletedProcess:
-    """GNU patch against ROOT.  -N (--forward) keeps return codes unambiguous:
-    a patch that is already applied/reversed is *skipped* (rc=1) instead of
-    being auto-detected and re-applied."""
+    """GNU patch against ROOT.
+
+    ``-N`` keeps return codes unambiguous: an already-applied (or already-
+    reversed) patch is *skipped* (rc=1) instead of being re-applied.
+    """
     cmd = ["patch", "-d", str(root), "-p1", "--batch", "-N"]
     if reverse:
         cmd.append("-R")
     if dry:
         cmd.append("--dry-run")
-    with open(patchfile, "rb") as f:
-        return subprocess.run(cmd, stdin=f, capture_output=True)
+    with open(patchfile, "rb") as fh:
+        return subprocess.run(cmd, stdin=fh, capture_output=True)
 
 
-def classify_patch(root: Path, stored: Path, rel: str) -> str:
-    """Three-state classification of a patch-mode entry.
+def classify_patch(root: Path, stored: Path, rel: str) -> State:
+    """Classify a patch entry from two dry runs (both with ``-N``).
 
-    Interpretation of the two dry runs (both with ``-N``):
-
-      * reverse dry-run rc==0  -> stored entries are currently applied
-      * forward  dry-run rc==0 -> not applied
-      * both nonzero           -> conflict (tree drifted from both states)
-
-    The source file's parent is created first: GNU patch's forward dry-run
-    fails when the target directory is missing, which would misclassify a
-    brand-new file's entry as "conflict".
+    reverse dry-run rc==0 -> applied; forward dry-run rc==0 -> not applied;
+    neither -> conflict.  Read-only: when the target's parent directory does
+    not exist, the patch can only be a not-yet-applied new file, so there is
+    no need to create it (``status`` must never touch the tree).
     """
-    target_path(root, rel).parent.mkdir(parents=True, exist_ok=True)
+    target = root / rel
+    if not target.parent.is_dir():
+        return State.NOT_APPLIED if not target.exists() else State.CONFLICT
     if run_patch(root, stored, reverse=True, dry=True).returncode == 0:
-        return "applied"
-    if run_patch(root, stored, reverse=False, dry=True).returncode == 0:
-        return "not applied"
-    return "conflict"
+        return State.APPLIED
+    if run_patch(root, stored, dry=True).returncode == 0:
+        return State.NOT_APPLIED
+    return State.CONFLICT
 
 
 def patch_unparseable(root: Path, stored: Path) -> bool:
-    """True when GNU patch cannot parse the file at all (rc 2 = fatal)."""
+    """True when GNU patch cannot parse the file at all (rc=2 = fatal)."""
     return run_patch(root, stored, dry=True).returncode == 2
 
 
-def stored_state(root: Path, rel: str, mode: str, stored: Path) -> str:
-    if mode == "patch":
-        return classify_patch(root, stored, rel)
-    target = target_path(root, rel)
-    if not target.exists():
-        return "not applied"
-    if is_same(stored, target):
-        return "applied"
-    return "conflict"
+# =====================================================================
+# modes: each one owns its layout and its state/apply/reset behaviour
+# =====================================================================
+
+def orig_path(patchdb: Path, rel: str) -> Path:
+    """The recorded pristine baseline for a copy-mode entry."""
+    return patchdb / ORIG_DIRNAME / rel
 
 
-# -- per-mode ops: apply/reset return (mark, text); commands print them ---
+class Mode:
+    """How one entry is stored, classified, applied and reset.
 
-def apply_patch(root: Path, pdb: Path, rel: str, stored: Path):
-    state = classify_patch(root, stored, rel)
-    if state == "applied":
-        return ("=", f"{rel} (already applied)")
-    if state == "conflict":
-        return ("!", f"{rel} (conflict, skipped)")
-    target_path(root, rel).parent.mkdir(parents=True, exist_ok=True)
-    if run_patch(root, stored).returncode == 0:
-        return ("+", f"{rel} (applied)")
-    return ("!", f"{rel} (apply failed)")
+    A mode owns the piece of layout it introduces: ``suffix`` for its stored
+    file (``.patch`` or nothing).  Subclasses implement the four operations.
+    """
+
+    name: str
+    suffix: str
+
+    def stored_name(self, rel: str) -> str:
+        return rel + self.suffix
+
+    def stored_path(self, patchdb: Path, rel: str) -> Path:
+        return patchdb / self.stored_name(rel)
+
+    def source_name(self, stored_rel: str) -> str:
+        return stored_rel[:-len(self.suffix)] if self.suffix else stored_rel
+
+    # implemented by subclasses
+    def store(self, context, rel, source, baseline) -> Entry | None:
+        raise NotImplementedError
+
+    def state(self, context, entry) -> State:
+        raise NotImplementedError
+
+    def apply(self, context, entry) -> Change:
+        raise NotImplementedError
+
+    def reset(self, context, entry) -> Change:
+        raise NotImplementedError
 
 
-def apply_copy(root: Path, pdb: Path, rel: str, stored: Path):
-    target = target_path(root, rel)
-    if target.exists() and is_same(stored, target):
-        return ("=", f"{rel} (already applied)")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(stored, target)
-    return ("+", f"{rel} (applied)")
+class PatchMode(Mode):
+    name = "patch"
+    suffix = ".patch"
+
+    def store(self, context, rel, source, baseline) -> Entry | None:
+        content = diff_vs_baseline(context.root, rel,
+                                   baseline.data if baseline else None)
+        if content is None:
+            return None
+        for stale in (COPY.stored_path(context.patchdb, rel),
+                      orig_path(context.patchdb, rel)):
+            if stale.exists():
+                stale.unlink()
+        if baseline and baseline.commit:
+            content = f"# base: {baseline.commit}\n" + content
+        dest = self.stored_path(context.patchdb, rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content)
+        return Entry(rel, self, dest)
+
+    def state(self, context, entry) -> State:
+        return classify_patch(context.root, entry.stored, entry.rel)
+
+    def apply(self, context, entry) -> Change:
+        state = self.state(context, entry)
+        if state is State.APPLIED:
+            return Change("=", entry, "already applied")
+        if state is State.CONFLICT:
+            return Change("!", entry, "conflict, skipped")
+        entry.target(context.root).parent.mkdir(parents=True, exist_ok=True)
+        if run_patch(context.root, entry.stored).returncode == 0:
+            return Change("+", entry, "applied")
+        return Change("!", entry, "apply failed")
+
+    def reset(self, context, entry) -> Change:
+        if self.state(context, entry) is not State.APPLIED:
+            return Change("=", entry, "not applied")
+        if run_patch(context.root, entry.stored, reverse=True).returncode == 0:
+            return Change("-", entry, "reverted")
+        return Change("!", entry, "revert failed")
 
 
-def reset_patch(root: Path, pdb: Path, rel: str, stored: Path):
-    if classify_patch(root, stored, rel) != "applied":
-        return ("=", f"{rel} (not applied)")
-    if run_patch(root, stored, reverse=True).returncode == 0:
-        return ("-", f"{rel} (reverted)")
-    return ("!", f"{rel} (revert failed)")
+class CopyMode(Mode):
+    name = "copy"
+    suffix = ""
 
+    def store(self, context, rel, source, baseline) -> Entry | None:
+        stale = PATCH.stored_path(context.patchdb, rel)
+        if stale.exists():
+            stale.unlink()
+        dest = self.stored_path(context.patchdb, rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, dest)
+        if baseline is not None and baseline.data != source.read_bytes():
+            original = orig_path(context.patchdb, rel)
+            original.parent.mkdir(parents=True, exist_ok=True)
+            original.write_bytes(baseline.data)
+        return Entry(rel, self, dest)
 
-def reset_copy(root: Path, pdb: Path, rel: str, stored: Path):
-    target = target_path(root, rel)
-    orig = orig_path(pdb, rel)
-    if orig.exists():
-        if target.exists() and is_same(orig, target):
-            return ("=", f"{rel} (already pristine)")
+    def state(self, context, entry) -> State:
+        target = entry.target(context.root)
+        if not target.exists():
+            return State.NOT_APPLIED
+        if is_same(entry.stored, target):
+            return State.APPLIED
+        # a tracked copy also has a pristine baseline; matching it means "not applied"
+        original = orig_path(context.patchdb, entry.rel)
+        if original.exists() and is_same(original, target):
+            return State.NOT_APPLIED
+        return State.CONFLICT
+
+    def apply(self, context, entry) -> Change:
+        target = entry.target(context.root)
+        if target.exists() and is_same(entry.stored, target):
+            return Change("=", entry, "already applied")
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(orig, target)
-        return ("-", f"{rel} (restored from .orig)")
-    if target.exists():
-        target.unlink()
-        return ("-", f"{rel} (removed)")
-    return ("=", f"{rel} (not applied)")
+        shutil.copyfile(entry.stored, target)
+        return Change("+", entry, "applied")
+
+    def reset(self, context, entry) -> Change:
+        target = entry.target(context.root)
+        original = orig_path(context.patchdb, entry.rel)
+        if original.exists():
+            if target.exists() and is_same(original, target):
+                return Change("=", entry, "already pristine")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(original, target)
+            return Change("-", entry, "restored from .orig")
+        if target.exists():
+            target.unlink()
+            return Change("-", entry, "removed")
+        return Change("=", entry, "not applied")
 
 
-APPLY_OPS = {"patch": apply_patch, "copy": apply_copy}
-RESET_OPS = {"patch": reset_patch, "copy": reset_copy}
+PATCH = PatchMode()
+COPY = CopyMode()
+MODES: dict[str, Mode] = {PATCH.name: PATCH, COPY.name: COPY}
 
 
-# -- commands --------------------------------------------------------------
+def mode_for(stored_rel: str) -> Mode:
+    """The mode a stored file belongs to, from its suffix."""
+    return PATCH if stored_rel.endswith(PATCH.suffix) else COPY
 
-def cmd_add(args) -> None:
-    root = require_root(" (mkdir patchdb/)")
-    pdb = patchdb_dir(root)
-    pdb.mkdir(parents=True, exist_ok=True)
-    for f in args.files:
-        rel = src_rel(root, f)
-        src = target_path(root, rel)
-        if not src.exists():
-            die(f"{f}: no such file")
-        repo = find_git_repo(src)
-        tracked, prel = False, None
-        if repo is not None:
-            prel = os.path.relpath(os.path.realpath(src), repo)
-            tracked = git_tracked(repo, prel)
 
-        mode = args.mode
-        if mode is None:
-            mode = "patch" if tracked and not is_binary(src) else "copy"
+# =====================================================================
+# aliases: git-style expansion before the command is parsed
+# =====================================================================
 
-        if mode == "patch":
-            pristine = git_head_content(repo, prel) if tracked else None
-            content = diff_vs_baseline(root, rel, pristine)
-            if content is None:
-                msg(f"skip {rel}: no changes against baseline "
-                    f"(use --mode copy to force a whole-file copy)")
-                continue
-            for stale in (copy_path(pdb, rel), orig_path(pdb, rel)):
-                if stale.exists():
-                    stale.unlink()
-            dest = patch_path(pdb, rel)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            base = git_head_sha(repo) if repo else None
-            if base:
-                content = f"# base: {base}\n" + content
-            dest.write_text(content)
-            msg(f"add  patch  {rel}")
+def run_shell_alias(command: str, rest: list[str]) -> int:
+    """Run a ``!`` alias with the remaining argv as positional parameters.
+
+    Mirrors git: ``sh -c '<command> "$@"' <command> <args...>``.
+    """
+    script = command if not rest else command + ' "$@"'
+    return subprocess.run(["sh", "-c", script, command, *rest]).returncode
+
+
+def expand_alias(context: Context, argv: list[str]) -> list[str]:
+    """Replace a leading alias until the first word is a real command.
+
+    ``patchman st code/build`` -> ``status code/build`` when ``alias.st`` is
+    set.  A ``!`` body runs a shell command and terminates this process.
+    """
+    seen: list[str] = []
+    while argv:
+        name = argv[0]
+        body = context.config.alias(name)
+        if body is None:
+            return argv
+        if not body:
+            die(f"empty alias for {name}")
+
+        if len(argv) == 2 and argv[1] in ("-h", "--help"):
+            note(f"'{name}' is aliased to '{body}'")
+        if name in seen:
+            die("alias loop detected: " + " -> ".join(seen + [name]))
+
+        seen.append(name)
+        if body.startswith("!"):
+            sys.exit(run_shell_alias(body[1:], argv[1:]))
+        argv = shlex.split(body) + argv[1:]
+    return argv
+
+
+# =====================================================================
+# commands
+# =====================================================================
+
+def cmd_add(context: Context, args) -> None:
+    context.patchdb.mkdir(parents=True, exist_ok=True)
+    for path in args.files:
+        rel = tree_rel(context.root, path)
+        source = context.root / rel
+        if not source.exists():
+            die(f"{path}: no such file")
+
+        baseline = Baseline.of(source)
+        if args.mode:
+            mode = MODES[args.mode]
         else:
-            if patch_path(pdb, rel).exists():
-                patch_path(pdb, rel).unlink()
-            dest = copy_path(pdb, rel)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dest)
-            if tracked:
-                pristine = git_head_content(repo, prel)
-                if pristine is not None and pristine != open(src, "rb").read():
-                    orel = orig_path(pdb, rel)
-                    orel.parent.mkdir(parents=True, exist_ok=True)
-                    orel.write_bytes(pristine)
-            msg(f"add  copy   {rel}")
+            mode = PATCH if baseline and not is_binary(source) else COPY
+
+        entry = mode.store(context, rel, source, baseline)
+        if entry is None:
+            print(f"skip {rel}: no changes against baseline "
+                  f"(use --mode copy to force a whole-file copy)")
+        else:
+            print(f"add  {mode.name:<5} {rel}")
 
 
-def cmd_status(args) -> None:
-    root = require_root()
-    pdb = patchdb_dir(root)
-    entries = list_stored(pdb, clip_arg(root, args.dir))
+def cmd_status(context: Context, args) -> None:
+    entries = select(context, args.paths)
     if args.porcelain:
-        # machine-readable, git-status--porcelain style: rel<TAB>state
-        for rel, mode, stored in entries:
-            print(f"{rel}\t{stored_state(root, rel, mode, stored)}")
+        for entry in entries:
+            print(f"{entry.rel}\t{entry.mode.state(context, entry).value}")
         return
     if not entries:
-        msg("(no patches)")
+        print("(no patches)")
         return
-    rows = [(stored_state(root, rel, mode, stored), mode, rel)
-            for rel, mode, stored in entries]
-    width = max(len(r[2]) for r in rows)
-    for state, mode, rel in rows:
-        print(f"[{state:<11}] {mode:<5} {rel:<{width}}")
+    for entry in entries:
+        state = entry.mode.state(context, entry)
+        print(f"[{state.value:<11}] {entry.mode.name:<5} {entry.rel}")
 
 
-def cmd_apply(args) -> None:
-    root = require_root()
-    pdb = patchdb_dir(root)
-    entries = list_stored(pdb, clip_arg(root, args.dir))
+def cmd_apply(context: Context, args) -> None:
+    entries = select(context, args.paths)
     if not entries:
-        msg("(nothing to apply)")
+        print("(nothing to apply)")
         return
-    for rel, mode, stored in entries:
-        mark, text = APPLY_OPS[mode](root, pdb, rel, stored)
-        print(f"  {mark} {text}")
+    report(entry.mode.apply(context, entry) for entry in entries)
 
 
-def cmd_reset(args) -> None:
-    root = require_root()
-    pdb = patchdb_dir(root)
-    entries = list_stored(pdb, clip_arg(root, args.dir))
+def cmd_reset(context: Context, args) -> None:
+    entries = select(context, args.paths)
     if not entries:
-        msg("(nothing to checkout)")
+        print("(nothing to checkout)")
         return
-    for rel, mode, stored in entries:
-        mark, text = RESET_OPS[mode](root, pdb, rel, stored)
-        print(f"  {mark} {text}")
+    report(entry.mode.reset(context, entry) for entry in entries)
 
 
-def cmd_rm(args) -> None:
-    root = require_root()
-    pdb = patchdb_dir(root)
-    for f in args.files:
-        rel = src_rel(root, f)
+def cmd_rm(context: Context, args) -> None:
+    for path in args.files:
+        rel = tree_rel(context.root, path)
+        candidates = [PATCH.stored_path(context.patchdb, rel),
+                      COPY.stored_path(context.patchdb, rel),
+                      orig_path(context.patchdb, rel)]
         removed = False
-        for cand in (patch_path(pdb, rel), copy_path(pdb, rel),
-                     orig_path(pdb, rel)):
-            if cand.exists():
-                cand.unlink()
+        for candidate in candidates:
+            if candidate.exists():
+                candidate.unlink()
                 removed = True
-        msg(f"  - {rel}" if removed else f"  ? {rel} (nothing stored)")
+        print(f"  - {rel}" if removed else f"  ? {rel} (nothing stored)")
 
 
-def cmd_cat(args) -> None:
-    root = require_root()
-    pdb = patchdb_dir(root)
-    rel = src_rel(root, args.file)
-    for cand in (patch_path(pdb, rel), copy_path(pdb, rel)):
-        if cand.is_file():
-            sys.stdout.buffer.write(cand.read_bytes())
+def cmd_cat(context: Context, args) -> None:
+    rel = tree_rel(context.root, args.file)
+    for mode in (PATCH, COPY):
+        candidate = mode.stored_path(context.patchdb, rel)
+        if candidate.is_file():
+            sys.stdout.buffer.write(candidate.read_bytes())
             return
     die(f"{rel}: nothing stored")
 
 
-def cmd_verify(args) -> None:
-    root = require_root()
-    pdb = patchdb_dir(root)
+def cmd_config(context: Context, args) -> None:
+    operands = args.args
+    config = context.config
+
+    if args.edit:
+        edit_config(config)
+    elif args.unset:
+        if not operands:
+            die("config --unset needs a key")
+        for name in operands:
+            if not config.unset(name):
+                die(f"no such key: {name}")
+    elif args.list or not operands:
+        for name, value in config.items():
+            print(f"{name}={value}")
+    elif len(operands) == 1:
+        section, key = Config.split(operands[0])
+        if key is None:
+            values = config.section(section)
+            if not values:
+                die(f"no such section: {operands[0]}")
+            for item, value in values:
+                print(f"{section}.{item}={value}")
+        else:
+            value = config.get(operands[0])
+            if value is None:
+                sys.exit(1)
+            print(value)
+    elif len(operands) == 2:
+        config.set(operands[0], operands[1])
+    else:
+        die("too many arguments for `patchman config`")
+
+
+def edit_config(config: Config) -> None:
+    configured = None if config.error else config.get("core.editor")
+    editor = (os.environ.get("PATCHMAN_EDITOR")
+              or configured
+              or os.environ.get("VISUAL")
+              or os.environ.get("EDITOR")
+              or "vi")
+    config.path.parent.mkdir(parents=True, exist_ok=True)
+    config.path.touch(exist_ok=True)
+    sys.exit(subprocess.run(shlex.split(editor) + [str(config.path)]).returncode)
+
+
+# -- verify: independent invariants, gathered into one report --------------
+
+def check_config(context: Context) -> list[str]:
+    return [f"config: {context.config.error}"] if context.config.error else []
+
+
+def check_manifest(context: Context) -> list[str]:
+    if (context.patchdb / MANIFEST).exists():
+        return [f"legacy {MANIFEST} file still present (remove it)"]
+    return []
+
+
+def check_orphan_origs(context: Context) -> list[str]:
     issues = []
-
-    if (pdb / MANIFEST).exists():
-        issues.append(f"legacy {MANIFEST} file still present (remove it)")
-
-    orig_root = pdb / ORIG_DIRNAME
-    if orig_root.is_dir():
-        for p in sorted(orig_root.rglob("*")):
-            if p.is_file():
-                rel = p.relative_to(orig_root).as_posix()
-                if not (pdb / rel).is_file():
+    original_root = context.patchdb / ORIG_DIRNAME
+    if original_root.is_dir():
+        for path in sorted(original_root.rglob("*")):
+            if path.is_file():
+                rel = path.relative_to(original_root).as_posix()
+                if not (context.patchdb / rel).is_file():
                     issues.append(f"orphan .orig entry (no copy stored): {rel}")
+    return issues
 
-    for rel, mode, stored in list_stored(pdb):
-        if not target_path(root, rel).exists():
-            issues.append(f"stored entry has no source file: {rel}")
-        if mode == "patch" and patch_unparseable(root, stored):
-            issues.append(f"unparseable patch: {rel}")
 
+def check_entries(context: Context) -> list[str]:
+    issues = []
+    for entry in all_entries(context.patchdb):
+        if not entry.target(context.root).exists():
+            issues.append(f"stored entry has no source file: {entry.rel}")
+        if entry.mode is PATCH and patch_unparseable(context.root, entry.stored):
+            issues.append(f"unparseable patch: {entry.rel}")
+    return issues
+
+
+CHECKS = (check_config, check_manifest, check_orphan_origs, check_entries)
+
+
+def cmd_verify(context: Context, args) -> None:
+    issues = [issue for check in CHECKS for issue in check(context)]
     if issues:
-        for it in issues:
-            print(f"verify: {it}")
+        for issue in issues:
+            print(f"verify: {issue}")
         print(f"{len(issues)} problem(s) found")
         sys.exit(1)
     print("patchdb OK")
 
 
-def cmd_root(_args) -> None:
-    print(require_root())
+def cmd_root(context: Context, args) -> None:
+    print(context.root)
 
 
-# -- command catalog -------------------------------------------------------
-# Porcelain = user-facing actions that compose the plumbing; plumbing =
-# scriptable / diagnostic primitives.  `--help` renders the two groups, the
-# same split git makes in `git help`.
+COMMANDS = {
+    "add": cmd_add,
+    "status": cmd_status,
+    "apply": cmd_apply,
+    "reset": cmd_reset,
+    "checkout": cmd_reset,       # builtin alias, kept from the original CLI
+    "rm": cmd_rm,
+    "cat": cmd_cat,
+    "config": cmd_config,
+    "verify": cmd_verify,
+    "root": cmd_root,
+}
 
-PORCELAIN = ("add", "status", "apply", "reset", "rm")
+
+# =====================================================================
+# command line
+# =====================================================================
+
+PORCELAIN = ("add", "status", "apply", "reset", "rm", "config")
 PLUMBING = ("cat", "verify", "root")
 
 HELP = {
-    "add": "store a patch for a source file",
-    "status": "show stored patches and their state "
-              "(--porcelain: rel<TAB>state)",
-    "apply": "apply all patches under a subtree (default: all)",
-    "reset": "revert all patches under a subtree (default: all) "
-             "(alias: checkout)",
+    "add": "store the current file as an entry (patch or copy mode)",
+    "status": "show stored entries and their state",
+    "apply": "apply entries under a pathspec (default: all)",
+    "reset": "revert entries under a pathspec (default: all)",
     "rm": "drop the stored entry for a file",
-    "cat": "dump the stored entry for a file",
+    "config": "read or write patchdb/config (get, set, unset, edit)",
+    "cat": "dump a stored entry to stdout",
     "verify": "fsck-style consistency check of patchdb",
     "root": "print the detected root directory",
 }
@@ -576,56 +957,79 @@ class PatchmanParser(argparse.ArgumentParser):
     formatter_class = argparse.RawDescriptionHelpFormatter
 
     def format_help(self) -> str:
-        """--help with the command list grouped into the two layers."""
         out = [self.description.rstrip(), "", "Commands", "--------"]
-        for label, names in (
-                ("porcelain — user-facing actions:",
-                 PORCELAIN),
-                ("plumbing — scriptable / diagnostics:",
-                 PLUMBING)):
-            out.append("")
-            out.append(f"  {label}")
+        for label, names in (("porcelain -- user-facing actions:", PORCELAIN),
+                             ("plumbing -- scriptable / diagnostics:", PLUMBING)):
+            out += ["", f"  {label}"]
             out += [f"    {name:<8} {HELP[name]}" for name in names]
         out += ["", "  run `patchman CMD --help` for each command's options."]
         return "\n".join(out) + "\n"
 
 
-def main(argv=None) -> None:
-    ap = PatchmanParser(prog=PROG, description=__doc__)
-    sub = ap.add_subparsers(dest="cmd", required=True)
+def parse_args(argv: list[str]):
+    parser = PatchmanParser(prog=PROG, description=__doc__)
+    # plain subparsers, so the grouped help above renders only for the top level
+    sub = parser.add_subparsers(dest="cmd", required=True,
+                                parser_class=argparse.ArgumentParser)
 
-    a = sub.add_parser("add", help=HELP["add"])
-    a.add_argument("-m", "--mode", choices=["patch", "copy"],
-                   help="force patch mode (diff) or copy mode (whole file)")
-    a.add_argument("files", nargs="+")
+    add = sub.add_parser("add", help=HELP["add"])
+    add.add_argument("-m", "--mode", choices=list(MODES),
+                     help="force patch mode (diff) or copy mode (whole file)")
+    add.add_argument("files", nargs="+")
 
-    s = sub.add_parser("status", help=HELP["status"])
-    s.add_argument("dir", nargs="?")
-    s.add_argument("--porcelain", action="store_true",
-                   help="machine-readable output: rel<TAB>state per line")
+    status = sub.add_parser("status", help=HELP["status"])
+    status.add_argument("paths", nargs="*", metavar="PATH",
+                        help="restrict to these paths (`-- .` for the cwd)")
+    status.add_argument("--porcelain", action="store_true",
+                        help="machine-readable output: rel<TAB>state per line")
 
-    p = sub.add_parser("apply", help=HELP["apply"])
-    p.add_argument("dir", nargs="?")
+    apply = sub.add_parser("apply", help=HELP["apply"])
+    apply.add_argument("paths", nargs="*", metavar="PATH")
 
-    c = sub.add_parser("reset", aliases=["checkout"], help=HELP["reset"])
-    c.add_argument("dir", nargs="?")
+    reset = sub.add_parser("reset", aliases=["checkout"], help=HELP["reset"])
+    reset.add_argument("paths", nargs="*", metavar="PATH")
 
-    r = sub.add_parser("rm", help=HELP["rm"])
-    r.add_argument("files", nargs="+")
+    rm = sub.add_parser("rm", help=HELP["rm"])
+    rm.add_argument("files", nargs="+")
 
     cat = sub.add_parser("cat", help=HELP["cat"])
     cat.add_argument("file")
 
-    sub.add_parser("verify", help=HELP["verify"])
+    cfg = sub.add_parser("config", help=HELP["config"],
+                         description="read or write patchdb/config")
+    cfg.add_argument("args", nargs="*", metavar="name [value]",
+                     help="`section.key` (get with one, set with two) "
+                          "or a bare `section` to list it")
+    cfg.add_argument("-l", "--list", action="store_true",
+                     help="list every key as section.key=value")
+    cfg.add_argument("--unset", action="store_true",
+                     help="remove the named key(s)")
+    cfg.add_argument("-e", "--edit", action="store_true",
+                     help="open the config in $EDITOR")
 
+    sub.add_parser("verify", help=HELP["verify"])
     sub.add_parser("root", help=HELP["root"])
 
-    args = ap.parse_args(argv)
-    handlers = {"add": cmd_add, "status": cmd_status,
-                "apply": cmd_apply, "reset": cmd_reset, "checkout": cmd_reset,
-                "rm": cmd_rm, "cat": cmd_cat, "verify": cmd_verify,
-                "root": cmd_root}
-    handlers[args.cmd](args)
+    return parser.parse_args(argv)
+
+
+def run(argv: list[str]) -> None:
+    context = Context.try_discover()      # optional: needed to resolve aliases
+    if context is not None:
+        argv = expand_alias(context, argv)
+
+    args = parse_args(argv)
+    context = context or Context.discover()
+    COMMANDS[args.cmd](context, args)
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        run(argv)
+    except PatchmanError as exc:
+        print(f"{PROG}: error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
