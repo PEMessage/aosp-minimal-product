@@ -4,7 +4,7 @@ The product is deliberately named `lineage_minimum`: the `lineage_` prefix is
 what makes the build system pull in the vendor hooks, so `m nothing` exercises
 the vendor-side logic instead of skipping it.
 
-## 1. The prefix triggers the vendor hooks
+## The prefix triggers the vendor hooks
 
 `build/envsetup.sh`'s `check_product` sets `LINEAGE_BUILD` from the prefix:
 
@@ -33,7 +33,7 @@ Named `minimum`, `LINEAGE_BUILD` would be empty, the whole vendor hook chain
 would be skipped, and `m nothing` would never exercise any vendor-side logic —
 contradicting this repo's goal of exercising the vendor hooks.
 
-## 2. The AndroidProducts mechanism requires a same-named file
+## The AndroidProducts mechanism requires a same-named file
 
 `lunch lineage_minimum-eng` resolves the product name to a `<product>.mk` file
 in the directories listed by `AndroidProducts.mk` (here the in-tree
@@ -47,13 +47,3 @@ PRODUCT_MAKEFILES := \
 
 So the product makefile must be `lineage_minimum.mk` and its `PRODUCT_NAME`
 must be `lineage_minimum`.
-
-## Summary
-
-| Item | Value |
-| --- | --- |
-| Product name | `lineage_minimum` |
-| lunch | `lunch lineage_minimum-eng` |
-| Makefile | `lineage_minimum.mk` |
-| `LINEAGE_BUILD` | `minimum` (vendor hooks active) |
-| SOONG config | auto-exported by `BoardConfigSoong.mk`, no hand-written block |

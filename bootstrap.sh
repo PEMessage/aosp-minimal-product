@@ -75,13 +75,10 @@ init_tree() {
     [[ -d "$TOP/.repo" ]] && return 0
     runcmd mkdir -p "$TOP"
     # --repo-url: TUNA does not mirror git-repo; USTC does.
-    # --repo-rev v2.66.1: pin the repo tool to a fixed tag so behavior stays
-    #   stable across updates (e.g. the shallow-clone handling below).
-    # --no-repo-verify: no gpg in the FHS container, skips tag signature check.
-    # --depth 1: shallow-clone every project that lacks an explicit manifest
-    #   `clone-depth`. repo 2.66 stores this in repo.depth and applies it to
-    #   all such projects, so no clone-depth injection into the manifest is
-    #   needed (full-history syncs over a CN mirror are far too slow).
+    # --repo-rev v2.66.1: pin the tool so the --depth behavior stays stable.
+    # --no-repo-verify: no gpg in the FHS container.
+    # --depth 1: shallow-clone every project lacking a manifest clone-depth
+    #   (repo 2.66 stores this in repo.depth and applies it to all of them).
     runcmd repo init -u "$MANIFEST_URL" -b "$BRANCH" \
         --repo-url https://mirrors.ustc.edu.cn/aosp/git-repo.git \
         --repo-rev v2.66.1 \
@@ -92,12 +89,9 @@ init_tree() {
     runcmd mv "$TOP/.repo/manifests/default.xml.tuna" "$TOP/.repo/manifests/default.xml"
 }
 
-# Apply the repo-local manifests from their patchman copy entries
-# (patchdb/code/.repo/local_manifests/, e.g. kati.xml which brings back
-# external/kati as build/kati). Runs on every invocation so updated manifests
-# propagate to already-initialized trees; repo picks them up on the next
-# `repo sync`. `patchman apply` is idempotent and creates
-# .repo/local_manifests/ if it is missing.
+# Apply the repo-local manifests from their patchman copy entries (e.g.
+# kati.xml, which adds build/kati). Idempotent; repo picks new manifests up on
+# the next `repo sync`.
 install_local_manifests() {
     title
     [[ -d "$TOP/.repo" ]] || return 0
