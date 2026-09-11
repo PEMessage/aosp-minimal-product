@@ -103,7 +103,5 @@ launched process).
 
 ## 10. Worked example in this repo
 
-- Output: `docs/blog-microfactory-source-analysis.md` — this method applied to
-  microfactory, including the full 11.4 ms cache-hit trace
 - Enabling patch that wraps the target command line in headless dlv:
   `patchdb/code/build/blueprint/microfactory/microfactory.bash.patch`

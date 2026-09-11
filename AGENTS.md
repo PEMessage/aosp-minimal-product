@@ -15,9 +15,11 @@ It is distro-agnostic and pulls everything from Tsinghua mirrors (China-friendly
 - `bootstrap.sh` — idempotent entry point. Repo-inits the tree, syncs only the
   minimal set of repos needed for `m nothing`, applies zero-patch fixes, and
   runs the verification build.
-- `device/minimum/` — the custom `lineage_minimum` product
-  (`lunch lineage_minimum-eng`). A headless x86_64 board: no kernel, no
-  bootloader, no images.
+- No standalone `device/` or `local_manifests/` directory: the `lineage_minimum`
+  product (`lunch lineage_minimum-eng`; a headless x86_64 board — no kernel, no
+  bootloader, no images) and the repo local manifests live directly in the AOSP
+  tree as `code/device/minimum/` and `code/.repo/local_manifests/`, managed by
+  patchman as whole-file copy entries (see the `bin/patchman` bullet below).
 - `scripts/make_manifest.py` — rewrites manifest remotes to Tsinghua AOSP.
   Shallow cloning is handled by `repo init --depth 1` (bootstrap.sh pins the
   repo tool to tag `v2.66.1`, which applies that depth to every project lacking
@@ -32,7 +34,9 @@ It is distro-agnostic and pulls everything from Tsinghua mirrors (China-friendly
   `code/build/blueprint/microfactory/microfactory.bash` ->
   `patchdb/code/build/blueprint/microfactory/microfactory.bash.patch`. This is
   how in-tree source tweaks (microfactory dlv hook, envsetup bashdb line, ...)
-  are kept reproducible and git-tracked.
+  are kept reproducible and git-tracked. It also owns the product makefiles and
+  the local manifests as copy entries: `patchdb/code/device/minimum/` and
+  `patchdb/code/.repo/local_manifests/`, applied by `bootstrap.sh`.
 - `docs/` — notes on design decisions (e.g. `docs/why-lineage_minimum.md`).
 - `code/` — the actual AOSP tree (repo workspace), created by `bootstrap.sh`.
 
@@ -127,10 +131,11 @@ device files:
   `build/core/` are symlinks)
 - `external/golang-protobuf` (soong_ui microfactory bootstrap)
 - `external/starlark-go` (`build/make/tools/rbcrun` soong module)
-- `build/kati` (ckati sources, added via `local_manifests/kati.xml`; the
-  lineage-19.1 manifest ships only the prebuilt ckati. Revision is a pinned
-  SHA on a USTC remote — see the file header for the full rationale.
-  Source tweaks are managed with patchman under `patchdb/code/build/kati/`)
+- `build/kati` (ckati sources, added via the patchman-managed local manifest
+  `.repo/local_manifests/kati.xml`; the lineage-19.1 manifest ships only the
+  prebuilt ckati. Revision is a pinned SHA on a USTC remote — see the file
+  header for the full rationale. Source tweaks are managed with patchman under
+  `patchdb/code/build/kati/`)
 - `prebuilts/build-tools`, `prebuilts/go/linux-x86`, `prebuilts/jdk/jdk11`,
   `prebuilts/clang/host/linux-x86`
   (ckati/ninja, go toolchain, Java 11; clang = the Android 12 toolchain used

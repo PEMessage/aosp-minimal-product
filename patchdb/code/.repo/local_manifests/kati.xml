@@ -32,8 +32,11 @@
   Any source tweaks inside build/kati are managed with patchman and land
   under patchdb/code/build/kati/ (see docs/patchman.md).
 
-  bootstrap.sh copies this file into $TOP/.repo/local_manifests/ (see
-  install_local_manifests) and syncs the path in sync_deps.
+  This local manifest itself lives in the repo tree at
+  .repo/local_manifests/kati.xml (it is the true source, applied/refreshed
+  by bootstrap.sh from the patchman copy entry under
+  patchdb/code/.repo/local_manifests/kati.xml); sync_deps then fetches
+  build/kati.
 -->
 <manifest>
   <remote name="ustc-aosp"

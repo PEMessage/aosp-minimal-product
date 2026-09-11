@@ -25,6 +25,7 @@ MANIFEST_URL="https://mirrors.tuna.tsinghua.edu.cn/git/lineageOS/LineageOS/andro
 need() { command -v "$1" >/dev/null || die "missing: $1"; }
 die()  { echo "error: $*" >&2; exit 1; }
 repo() { ( cd "$TOP" && command repo "$@" ); }
+pm()   { ( cd "$HERE" && exec "$HERE/bin/patchman" "$@" ); }
 
 runcmd() {
     echo "Running: $*"
@@ -49,7 +50,7 @@ check_env() {
 
     runcmd need git
     runcmd need python3
-    runcmd [ -e /bin/pwd ] || die "/bin/pwd missing - enter the FHS container first (./run.sh)"
+    runcmd [ -e /bin/pwd ] || die "/bin/pwd missing - enter the FHS container first (nix develop)"
 }
 
 ensure_repo() {
@@ -91,18 +92,16 @@ init_tree() {
     runcmd mv "$TOP/.repo/manifests/default.xml.tuna" "$TOP/.repo/manifests/default.xml"
 }
 
-# Copy the outer repo's local manifests (e.g. local_manifests/kati.xml,
-# which brings back external/kati) into the repo workspace. Runs on every
-# invocation so updated manifests propagate to already-initialized trees;
-# repo picks them up on the next `repo sync`.
+# Apply the repo-local manifests from their patchman copy entries
+# (patchdb/code/.repo/local_manifests/, e.g. kati.xml which brings back
+# external/kati as build/kati). Runs on every invocation so updated manifests
+# propagate to already-initialized trees; repo picks them up on the next
+# `repo sync`. `patchman apply` is idempotent and creates
+# .repo/local_manifests/ if it is missing.
 install_local_manifests() {
     title
     [[ -d "$TOP/.repo" ]] || return 0
-    local xml
-    for xml in "$HERE"/local_manifests/*.xml; do
-        [[ -e "$xml" ]] || return 0
-        runcmd cp "$xml" "$TOP/.repo/local_manifests/"
-    done
+    runcmd pm apply code/.repo/local_manifests
 }
 
 sync_core() {
@@ -118,7 +117,7 @@ sync_deps() {
     # Repos soong analysis needs beyond build/ and prebuilts/.
     # external/golang-protobuf: soong_ui microfactory bootstrap.
     # external/starlark-go:     build/make/tools/rbcrun soong module.
-    # build/kati:               ckati sources (via local_manifests/kati.xml;
+    # build/kati:               ckati sources (via .repo/local_manifests/kati.xml;
     #                           tweaks are managed with patchman).
     # vendor/lineage:           envsetup + vendormk hooks (required, do not remove).
     local deps
@@ -141,10 +140,10 @@ quarantine() {
 
 setup_product() {
     title
-    local dev="$TOP/device/minimum"
-    [[ -f "$dev/AndroidProducts.mk" ]] && return 0
-    runcmd mkdir -p "$dev"
-    runcmd cp "$HERE"/device/minimum/{AndroidProducts.mk,lineage_minimum.mk,BoardConfig.mk} "$dev/"
+    # The product makefiles are patchman copy entries under
+    # patchdb/code/device/minimum/ (no separate device/ directory), applied
+    # into the tree. Idempotent: matches the stored copy on every run.
+    runcmd pm apply code/device/minimum
 }
 
 verify_build() {

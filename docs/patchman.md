@@ -41,6 +41,8 @@ Store paths mirror source paths relative to the root:
 |--------------------------------------------------|----------------------------------------|
 | `code/build/blueprint/microfactory/microfactory.bash` | `patchdb/code/build/blueprint/microfactory/microfactory.bash.patch` |
 | `code/build.sh`                                  | `patchdb/code/build.sh` (copy mode)    |
+| `code/device/minimum/AndroidProducts.mk`         | `patchdb/code/device/minimum/AndroidProducts.mk` (copy mode) |
+| `code/.repo/local_manifests/kati.xml`            | `patchdb/code/.repo/local_manifests/kati.xml` (copy mode) |
 
 ## Two modes
 
@@ -64,17 +66,25 @@ Two details worth knowing:
   directory layout is the whole state, and a patch's mode is derivable
   from whether the stored file ends in `.patch`.
 
-## Command layers (git-style porcelain / plumbing)
+## What this repo stores
 
-`patchman --help` renders the subcommands in two groups, mirroring how
-`git help` categorizes its commands:
+Both modes are in use here:
 
-* **porcelain** — user-facing actions that compose the plumbing:
-  `add`, `status` (human table), `apply`, `reset`, `rm`
-* **plumbing** — scriptable / diagnostic primitives:
-  `cat` (dump a stored entry), `verify` (consistency check), `root`
-  (discovery query); plus `status --porcelain` for machine-readable output,
-  the same split git makes between `git status` and `git status --porcelain`
+* **patch mode** — debug tweaks applied on top of the synced AOSP sources:
+  `code/build/kati/src/main.cc` (CKATI_WAIT_USR2), the envsetup bashdb line,
+  the soong_ui dlv hook and the microfactory dlv hook.
+* **copy mode** — content with no upstream baseline inside the tree, so it has
+  nowhere to diff against. There is **no standalone `device/` or
+  `local_manifests/` directory** in this repo; instead these are real files in
+  the tree, owned by patchman as whole-file copies:
+  * the product makefiles — `code/device/minimum/` (`AndroidProducts.mk`,
+    `lineage_minimum.mk`, `BoardConfig.mk`), and
+  * the repo local manifests — `code/.repo/local_manifests/kati.xml`.
+
+`bootstrap.sh` materialises both with `patchman apply code/device/minimum` and
+`patchman apply code/.repo/local_manifests` (see `install_local_manifests` /
+`setup_product`). To edit them, change the file in the tree and re-run
+`patchman add --mode copy <file>` to refresh the stored copy.
 
 ## Usage
 
@@ -106,12 +116,6 @@ Notes
 * `apply`/`reset`/`status` accept a directory **or a single stored
   file path**; all paths are resolved from the current directory, and a
   rooted lookup like `status patchdb/code/build` is accepted too.
-* `status --porcelain` is the machine-readable form (git's
-  `status --porcelain` analogue): one `rel<TAB>state` line per entry,
-  suitable for scripting.
-* `reset` is aliased as `checkout` for muscle-memory convenience.
-* `$PATCHDB` (git's `$GIT_DIR` analogue) overrides the walk-up search:
-  point it at a `patchdb/` directory and the root is its parent.
 * `status` uses `patch --dry-run` (with `-N`) so it never writes `.rej`
   files and correctly distinguishes applied / not applied / conflict.
 * `verify` checks for orphan `.orig` baselines, unparseable patch files,
