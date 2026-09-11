@@ -61,6 +61,43 @@ artifacts.
 Debug hooks (gdb for ckati, dlv for soong_ui/microfactory) are in
 `docs/debugger.md`; the general dlv workflow is the `dlv-src-analysis` skill.
 
+## DeepClean
+
+`code/` is a `repo` checkout, and the expensive part of a fresh
+`./bootstrap.sh` is *downloading* the git object stores, not checking them out.
+Those stores live in `code/.repo/` (`project-objects/`, `projects/`).  So the
+cheap way back to a pristine tree is to keep `.repo/` and rebuild the working
+tree from it: deleting `code/` entirely is the cleanest reset, this is the best
+we can do without re-downloading everything.
+
+`scripts/deep_clean.sh` is the delete half only: keep `code/.repo/`, drop every
+other top-level entry there.  The re-sync is a separate step, so the two
+compose:
+
+```sh
+scripts/deep_clean.sh            # drop the working tree, keep .repo/
+scripts/deep_clean.sh --dry-run  # list what would be removed
+scripts/deep_clean.sh -y         # no confirmation prompt
+
+LOCAL_ONLY=1 ./bootstrap.sh      # rebuild from local objects, no network
+```
+
+It touches nothing under `.repo/` -- manifest and object stores are left as
+they are.  It runs anywhere; the local sync needs the FHS dev shell
+(`nix develop`).  `deep_clean.sh` refuses to delete without `-y` when stdin is
+not a tty.
+
+What survives and what comes back:
+
+- **survives** — `code/.repo/` (objects, refs, manifests, `local_manifests/`).
+- **re-checked-out** — every `repo` project working tree.
+- **re-applied** by `bootstrap.sh` — the patchman copy entries (local manifest,
+  `device/minimum/` product makefiles).
+- **gone** — `code/out/`, so the next `m nothing` is a clean build.
+
+If a project was never fully fetched, `--local-only` fails on it; fall back to a
+normal `repo sync` for just that path.
+
 ## Patchman workflows
 
 `bin/patchman` is the source of truth for anything inside `code/` the synced

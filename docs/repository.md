@@ -19,6 +19,9 @@ Layout, repo set and product-naming rationale. Agent-facing rules are in
   paths from the manifest.
 - `scripts/setup_go_tools.sh` — builds `gopls` + `dlv` with the tree's prebuilt
   Go; see `docs/debugger.md`.
+- `scripts/deep_clean.sh` — DeepClean: drop the `code/` working tree while
+  keeping `code/.repo/`, so it can be re-synced without re-downloading; see
+  `AGENTS.md`.
 - `bin/patchman` — git-like per-file patch manager for the out-of-tree `repo`
   workspace; see `docs/patchman.md`.
 - `docs/` — design notes, debugging, patchman manual.
