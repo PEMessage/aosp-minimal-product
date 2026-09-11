@@ -19,7 +19,9 @@ It is distro-agnostic and pulls everything from Tsinghua mirrors.
 3. **The outer git repo is the source of truth.** Anything inside `code/` the
    synced tree does not own (source tweaks, product makefiles, local manifests)
    is managed with patchman under `patchdb/` and applied by `bootstrap.sh` —
-   never edited into `code/` by hand.
+   never edited into `code/` by hand. patchman is the git-like patch layer over
+   the out-of-tree `repo` workspace, and its UX follows git
+   (`docs/patchman.md`).
 4. **`m nothing` stays green.** It is the build of record; re-run it after any
    change to the sync list, manifest, product, or `bootstrap.sh`.
 5. **No secrets or mirror credentials.**

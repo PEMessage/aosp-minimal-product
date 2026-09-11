@@ -228,6 +228,61 @@ class Config:
 
 
 # =====================================================================
+# color: one small SGR palette, git-style
+# =====================================================================
+
+# SGR parameters (see the ANSI escape code table)
+RED, GREEN, YELLOW, CYAN = "31", "32", "33", "36"
+BOLD, DIM = "1", "2"
+
+STATE_COLORS = {State.APPLIED: GREEN,
+                State.NOT_APPLIED: YELLOW,
+                State.CONFLICT: RED}
+MARK_COLORS = {"+": GREEN, "-": YELLOW, "=": DIM, "!": RED}
+
+
+class Color:
+    """Tiny ANSI palette.
+
+    ``color.ui`` in patchdb/config is ``auto`` (default), ``always`` or
+    ``never``; ``--color`` / ``--no-color`` override it.  ``auto`` means a
+    terminal on stdout, no ``$NO_COLOR`` and a capable ``$TERM``.  Everything
+    goes through :meth:`paint`, so when color is off (or output is piped) the
+    bytes are exactly plain text.
+    """
+
+    enabled = False
+
+    @classmethod
+    def configure(cls, flag: bool | None, config: "Config | None") -> None:
+        if flag is True:
+            choice = "always"
+        elif flag is False:
+            choice = "never"
+        else:
+            choice = (config.get("color.ui") if config and not config.error
+                      else None) or "auto"
+        cls.enabled = cls._resolve(choice)
+
+    @staticmethod
+    def _resolve(choice: str) -> bool:
+        if choice == "always":
+            return True
+        if choice == "never":
+            return False
+        if "NO_COLOR" in os.environ or os.environ.get("TERM") == "dumb":
+            return False
+        return sys.stdout.isatty()
+
+    @classmethod
+    def paint(cls, text: str, *codes: str | None) -> str:
+        codes = [code for code in codes if code]
+        if not cls.enabled or not codes:
+            return text
+        return f"\x1b[{';'.join(codes)}m{text}\x1b[0m"
+
+
+# =====================================================================
 # discovery: root, patchdb, and the owning git repository
 # =====================================================================
 
@@ -267,11 +322,21 @@ class Context:
     root: Path
     patchdb: Path
     config: Config
+    cwd: Path
 
     @classmethod
     def from_root(cls, root: Path) -> "Context":
         patchdb = patchdb_dir(root)
-        return cls(root, patchdb, Config(patchdb / CONFIG_NAME))
+        return cls(root, patchdb, Config(patchdb / CONFIG_NAME), Path.cwd())
+
+    def display(self, rel: str) -> str:
+        """A stored path as the user should see it: relative to the cwd.
+
+        Like ``git status``, human output is cwd-relative (``../`` for entries
+        outside the current directory).  ``--porcelain`` deliberately bypasses
+        this and stays root-relative.
+        """
+        return os.path.relpath(self.root / rel, self.cwd)
 
     @classmethod
     def discover(cls) -> "Context":
@@ -341,10 +406,11 @@ class Change:
     note: str
 
 
-def report(changes) -> None:
-    """Print a stream of Changes, one per line."""
+def report(context: Context, changes) -> None:
+    """Print a stream of Changes, one per line, cwd-relative."""
     for change in changes:
-        print(f"  {change.mark} {change.entry.rel} ({change.note})")
+        mark = Color.paint(change.mark, MARK_COLORS.get(change.mark))
+        print(f"  {mark} {context.display(change.entry.rel)} ({change.note})")
 
 
 def all_entries(patchdb: Path) -> list[Entry]:
@@ -762,10 +828,12 @@ def cmd_add(context: Context, args) -> None:
 
         entry = mode.store(context, rel, source, baseline)
         if entry is None:
-            print(f"skip {rel}: no changes against baseline "
+            print(f"{Color.paint('skip', YELLOW)} {context.display(rel)}: "
+                  f"no changes against baseline "
                   f"(use --mode copy to force a whole-file copy)")
         else:
-            print(f"add  {mode.name:<5} {rel}")
+            name = Color.paint(f"{mode.name:<5}", CYAN)
+            print(f"{Color.paint('add', GREEN)}  {name} {context.display(rel)}")
 
 
 def cmd_status(context: Context, args) -> None:
@@ -779,7 +847,9 @@ def cmd_status(context: Context, args) -> None:
         return
     for entry in entries:
         state = entry.mode.state(context, entry)
-        print(f"[{state.value:<11}] {entry.mode.name:<5} {entry.rel}")
+        label = Color.paint(f"{state.value:<11}", STATE_COLORS[state])
+        name = Color.paint(f"{entry.mode.name:<5}", CYAN)
+        print(f"[{label}] {name} {context.display(entry.rel)}")
 
 
 def cmd_apply(context: Context, args) -> None:
@@ -787,7 +857,7 @@ def cmd_apply(context: Context, args) -> None:
     if not entries:
         print("(nothing to apply)")
         return
-    report(entry.mode.apply(context, entry) for entry in entries)
+    report(context, (entry.mode.apply(context, entry) for entry in entries))
 
 
 def cmd_reset(context: Context, args) -> None:
@@ -795,7 +865,7 @@ def cmd_reset(context: Context, args) -> None:
     if not entries:
         print("(nothing to checkout)")
         return
-    report(entry.mode.reset(context, entry) for entry in entries)
+    report(context, (entry.mode.reset(context, entry) for entry in entries))
 
 
 def cmd_rm(context: Context, args) -> None:
@@ -809,7 +879,10 @@ def cmd_rm(context: Context, args) -> None:
             if candidate.exists():
                 candidate.unlink()
                 removed = True
-        print(f"  - {rel}" if removed else f"  ? {rel} (nothing stored)")
+        if removed:
+            print(f"  {Color.paint('-', GREEN)} {context.display(rel)}")
+        else:
+            print(f"  {Color.paint('?', YELLOW)} {context.display(rel)} (nothing stored)")
 
 
 def cmd_cat(context: Context, args) -> None:
@@ -836,7 +909,7 @@ def cmd_config(context: Context, args) -> None:
                 die(f"no such key: {name}")
     elif args.list or not operands:
         for name, value in config.items():
-            print(f"{name}={value}")
+            print(f"{Color.paint(name, CYAN)}={value}")
     elif len(operands) == 1:
         section, key = Config.split(operands[0])
         if key is None:
@@ -844,7 +917,7 @@ def cmd_config(context: Context, args) -> None:
             if not values:
                 die(f"no such section: {operands[0]}")
             for item, value in values:
-                print(f"{section}.{item}={value}")
+                print(f"{Color.paint(f'{section}.{item}', CYAN)}={value}")
         else:
             value = config.get(operands[0])
             if value is None:
@@ -888,7 +961,8 @@ def check_orphan_origs(context: Context) -> list[str]:
             if path.is_file():
                 rel = path.relative_to(original_root).as_posix()
                 if not (context.patchdb / rel).is_file():
-                    issues.append(f"orphan .orig entry (no copy stored): {rel}")
+                    issues.append(f"orphan .orig entry (no copy stored): "
+                                  f"{context.display(rel)}")
     return issues
 
 
@@ -896,9 +970,10 @@ def check_entries(context: Context) -> list[str]:
     issues = []
     for entry in all_entries(context.patchdb):
         if not entry.target(context.root).exists():
-            issues.append(f"stored entry has no source file: {entry.rel}")
+            issues.append(f"stored entry has no source file: "
+                          f"{context.display(entry.rel)}")
         if entry.mode is PATCH and patch_unparseable(context.root, entry.stored):
-            issues.append(f"unparseable patch: {entry.rel}")
+            issues.append(f"unparseable patch: {context.display(entry.rel)}")
     return issues
 
 
@@ -909,10 +984,10 @@ def cmd_verify(context: Context, args) -> None:
     issues = [issue for check in CHECKS for issue in check(context)]
     if issues:
         for issue in issues:
-            print(f"verify: {issue}")
-        print(f"{len(issues)} problem(s) found")
+            print(f"{Color.paint('verify:', RED)} {issue}")
+        print(Color.paint(f"{len(issues)} problem(s) found", RED))
         sys.exit(1)
-    print("patchdb OK")
+    print(Color.paint("patchdb OK", GREEN))
 
 
 def cmd_root(context: Context, args) -> None:
@@ -966,36 +1041,49 @@ class PatchmanParser(argparse.ArgumentParser):
         return "\n".join(out) + "\n"
 
 
+def add_color_options(parser: argparse.ArgumentParser, *, default) -> None:
+    parser.add_argument("--color", dest="color", action="store_true", default=default,
+                        help="force color output")
+    parser.add_argument("--no-color", dest="color", action="store_false", default=default,
+                        help="disable color output")
+
+
 def parse_args(argv: list[str]):
     parser = PatchmanParser(prog=PROG, description=__doc__)
+    add_color_options(parser, default=None)
+    # shared by every subcommand, so `patchman status --no-color` works too;
+    # SUPPRESS keeps a top-level `--color` from being reset by the subparser
+    common = argparse.ArgumentParser(add_help=False)
+    add_color_options(common, default=argparse.SUPPRESS)
     # plain subparsers, so the grouped help above renders only for the top level
     sub = parser.add_subparsers(dest="cmd", required=True,
                                 parser_class=argparse.ArgumentParser)
 
-    add = sub.add_parser("add", help=HELP["add"])
+    add = sub.add_parser("add", help=HELP["add"], parents=[common])
     add.add_argument("-m", "--mode", choices=list(MODES),
                      help="force patch mode (diff) or copy mode (whole file)")
     add.add_argument("files", nargs="+")
 
-    status = sub.add_parser("status", help=HELP["status"])
+    status = sub.add_parser("status", help=HELP["status"], parents=[common])
     status.add_argument("paths", nargs="*", metavar="PATH",
                         help="restrict to these paths (`-- .` for the cwd)")
     status.add_argument("--porcelain", action="store_true",
                         help="machine-readable output: rel<TAB>state per line")
 
-    apply = sub.add_parser("apply", help=HELP["apply"])
+    apply = sub.add_parser("apply", help=HELP["apply"], parents=[common])
     apply.add_argument("paths", nargs="*", metavar="PATH")
 
-    reset = sub.add_parser("reset", aliases=["checkout"], help=HELP["reset"])
+    reset = sub.add_parser("reset", aliases=["checkout"], help=HELP["reset"],
+                           parents=[common])
     reset.add_argument("paths", nargs="*", metavar="PATH")
 
-    rm = sub.add_parser("rm", help=HELP["rm"])
+    rm = sub.add_parser("rm", help=HELP["rm"], parents=[common])
     rm.add_argument("files", nargs="+")
 
-    cat = sub.add_parser("cat", help=HELP["cat"])
+    cat = sub.add_parser("cat", help=HELP["cat"], parents=[common])
     cat.add_argument("file")
 
-    cfg = sub.add_parser("config", help=HELP["config"],
+    cfg = sub.add_parser("config", help=HELP["config"], parents=[common],
                          description="read or write patchdb/config")
     cfg.add_argument("args", nargs="*", metavar="name [value]",
                      help="`section.key` (get with one, set with two) "
@@ -1007,8 +1095,8 @@ def parse_args(argv: list[str]):
     cfg.add_argument("-e", "--edit", action="store_true",
                      help="open the config in $EDITOR")
 
-    sub.add_parser("verify", help=HELP["verify"])
-    sub.add_parser("root", help=HELP["root"])
+    sub.add_parser("verify", help=HELP["verify"], parents=[common])
+    sub.add_parser("root", help=HELP["root"], parents=[common])
 
     return parser.parse_args(argv)
 
@@ -1020,6 +1108,7 @@ def run(argv: list[str]) -> None:
 
     args = parse_args(argv)
     context = context or Context.discover()
+    Color.configure(getattr(args, "color", None), context.config)
     COMMANDS[args.cmd](context, args)
 
 
@@ -1028,7 +1117,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         run(argv)
     except PatchmanError as exc:
-        print(f"{PROG}: error: {exc}", file=sys.stderr)
+        prefix = Color.paint(f"{PROG}: error:", RED, BOLD)
+        print(f"{prefix} {exc}", file=sys.stderr)
         sys.exit(1)
 
 

@@ -5,6 +5,18 @@
 dependencies (just `git`, `diff` and GNU `patch`), all state is plain
 files under `patchdb/`, which is tracked by the outer git repo.
 
+## Core guideline
+
+patchman is the **git-like way to manage patches to this repo's out-of-tree
+AOSP workspace**.  `code/` is a `repo` checkout -- a union of many independent
+git projects, not one working tree -- and every change this repo makes to it
+lives in `patchdb/` and is re-applied by patchman; it is never hand-edited
+into `code/`.
+
+Its UX deliberately follows git, and new surface should keep doing so:
+three-tree state, pathspecs and `-- .`, `--porcelain`, `patchdb/config` with
+`[alias]`, cwd-relative human output, `--color`.  When in doubt, copy git.
+
 ## Model: three trees (git-style)
 
 Like `git status`, every decision is a **three-way comparison** between
@@ -99,6 +111,20 @@ extra arguments.  Cycles (`alias.a = b`, `alias.b = a`) are reported, never
 recursed.  Edit-time editor resolution is `$PATCHMAN_EDITOR`, then
 `core.editor`, then `$VISUAL`, `$EDITOR`, finally `vi`.
 
+## Color
+
+Output is colored only when it is going to a terminal, git-style:
+
+```sh
+patchman status                  # colored on a tty, plain when piped
+patchman status --no-color       # force off (also: `patchman --color status`)
+patchman config color.ui always  # persistent: auto (default) | always | never
+```
+
+`$NO_COLOR` disables `auto`, and `TERM=dumb` is treated as no color.
+`--color` / `--no-color` win over `color.ui`.  `status --porcelain` and
+`cat` are never colored, so scripted output stays byte-stable.
+
 ## What this repo stores
 
 Both modes are in use here:
@@ -156,6 +182,10 @@ Notes
   rooted lookup like `status patchdb/code/build` is accepted too.  Use `--` to
   separate pathspecs from options (`status --porcelain -- .`), exactly as with
   git; `.` means the current directory's subtree.
+* Human output prints paths relative to the **current directory** (like
+  `git status`, using `../` for entries outside it).  `status --porcelain`
+  deliberately stays **root-relative**, so scripted output does not change
+  with the caller's cwd.
 * `status` uses `patch --dry-run` (with `-N`) so it never writes `.rej`
   files and correctly distinguishes applied / not applied / conflict.  A
   tracked copy-mode entry whose target still equals its `.orig` baseline is

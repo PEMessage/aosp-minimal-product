@@ -19,7 +19,8 @@ Layout, repo set and product-naming rationale. Agent-facing rules are in
   paths from the manifest.
 - `scripts/setup_go_tools.sh` — builds `gopls` + `dlv` with the tree's prebuilt
   Go; see `docs/debugger.md`.
-- `bin/patchman` — per-file patch manager; see `docs/patchman.md`.
+- `bin/patchman` — git-like per-file patch manager for the out-of-tree `repo`
+  workspace; see `docs/patchman.md`.
 - `docs/` — design notes, debugging, patchman manual.
 - `code/` — the actual AOSP tree (repo workspace), created by `bootstrap.sh`.
 
