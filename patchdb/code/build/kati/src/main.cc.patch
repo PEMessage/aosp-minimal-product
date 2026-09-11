@@ -1,21 +1,34 @@
 # base: 9f48932c90ca93bc1777561cc22d1a2587bc0333
 diff --git a/code/build/kati/src/main.cc b/code/build/kati/src/main.cc
-index 417ec2c1d5cdb69cfe6c8ecd4d8fe63a0087da64..b92f0065a3f17c29e436a95cf454101a2bd3c9d5 100644
+index 417ec2c1d5cdb69cfe6c8ecd4d8fe63a0087da64..b465fcdad525b430d2e012adaef10db746524748 100644
 --- a/code/build/kati/src/main.cc
 +++ b/code/build/kati/src/main.cc
-@@ -353,7 +353,16 @@
+@@ -352,8 +352,29 @@
+   }
  }
  
++// CKATI_WAIT_USR2 hook: set by HandleWaitUsr2Resume() when SIGUSR2 arrives.
++static volatile sig_atomic_t g_wait_usr2_resume = 0;
++static void HandleWaitUsr2Resume(int) {
++  g_wait_usr2_resume = 1;
++}
++
  int main(int argc, char* argv[]) {
 -  if (argc >= 2 && !strcmp(argv[1], "--realpath")) {
-+  // Debug hook: when CKATI_WAIT_GDB is set, self-stop with SIGSTOP so a
-+  // debugger can attach before any makefile work happens.
-+  // Usage: CKATI_WAIT_GDB=1 <build cmd>, then: gdb <this ckati> -p <pid>.
++  // Debug hook: when CKATI_WAIT_USR2 is set, wait before any makefile work
++  // until released with SIGUSR2 (see bin/ckati-attach).
++  // A signal-driven wait is used instead of raise(SIGSTOP) because the
++  // Android build runs ckati inside an nsjail PID namespace, where ckati is
++  // PID 1 and the kernel silently ignores self-delivered SIGSTOP.
++  // Usage: CKATI_WAIT_USR2=1 <build cmd>, then: bin/ckati-attach
 +  bool realpath_mode = (argc >= 2 && !strcmp(argv[1], "--realpath"));
-+  if (!realpath_mode && getenv("CKATI_WAIT_GDB")) {
-+    fprintf(stderr, "[ckati] CKATI_WAIT_GDB: pid %d stopped (SIGSTOP); "
-+                    "attach a debugger, then 'continue'\n", getpid());
-+    raise(SIGSTOP);
++  if (!realpath_mode && getenv("CKATI_WAIT_USR2")) {
++    signal(SIGUSR2, HandleWaitUsr2Resume);
++    fprintf(stderr, "[ckati] CKATI_WAIT_USR2: pid %d waiting; attach a debugger, "
++                    "then send SIGUSR2 to continue\n", getpid());
++    while (!g_wait_usr2_resume) {
++      sleep(1);
++    }
 +  }
 +  if (realpath_mode) {
      HandleRealpath(argc - 2, argv + 2);

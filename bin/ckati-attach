@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
-# Attach gdb to a ckati process that is stopped by the CKATI_WAIT_GDB hook.
+# Attach gdb to a ckati process waiting in the CKATI_WAIT_USR2 hook.
 #
 # The hook lives in build/kati/src/main.cc
-# (patchdb/code/build/kati/src/main.cc.patch): with CKATI_WAIT_GDB set,
-# every real ckati run (dumpvars x2, kati build/package/cleanspec) raises
-# SIGSTOP before any makefile work.  build/kati/build.sh rebuilds ckati
-# with debug info and installs it over the prebuilt, which is what soong_ui
-# always execs.  This script is the other half: it polls for the stopped
-# process and hands it to gdb with the right symbol file.
+# (patchdb/code/build/kati/src/main.cc.patch): with CKATI_WAIT_USR2 set,
+# every real ckati run (dumpvars x2, kati build/package/cleanspec) waits
+# before any makefile work until it receives SIGUSR2.  build/kati/build.sh
+# rebuilds ckati with debug info and installs it over the prebuilt, which is
+# what soong_ui always execs.  This script is the other half: it polls for
+# the waiting process, hands it to gdb, then releases it with SIGUSR2.
 #
-#   terminal 1:  CKATI_WAIT_GDB=1 m nothing
+# SIGUSR2 (a handled signal) is used instead of SIGSTOP because soong_ui
+# sandboxes kati in nsjail, which puts ckati in a fresh PID namespace as
+# PID 1; the kernel silently drops SIGSTOP sent to a namespace init.
+#
+#   terminal 1:  CKATI_WAIT_USR2=1 m nothing
 #   terminal 2:  bin/ckati-attach
 #
+# To let the build proceed while keeping gdb attached, send SIGUSR2 from
+# another shell, or from inside gdb:  (gdb) signal SIGUSR2  then
+# (gdb) continue.
+#
 # Usage:
-#   bin/ckati-attach             # poll for a stopped ckati, attach, done
+#   bin/ckati-attach             # poll for a waiting ckati, attach, release
 #   bin/ckati-attach --loop      # after each gdb session, wait for the next
 #                                # ckati (one `m nothing` runs it several times)
 #   bin/ckati-attach 12345       # attach to a given pid
@@ -30,7 +38,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The build.sh output.  Same binary as the installed one (hash-checked
 # below); preferred over the installed path because its DWARF points back
 # into code/build/kati/src, so gdb shows real source paths.
-CKATI_DEBUG_BIN="$HERE/code/build/kati/ckati"
+CKATI_DEBUG_BIN="$HERE/../code/build/kati/ckati"
 
 need() { command -v "$1" >/dev/null || die "missing: $1"; }
 die()  { echo "error: $*" >&2; exit 1; }
@@ -65,9 +73,9 @@ check_yama() {
     fi
 }
 
-# Block until a ckati process exists; print its pid.  With CKATI_WAIT_GDB
-# set, the first one found is SIGSTOPped inside main(), so there is no
-# attach race (see docs/patchman.md sibling notes in AGENTS.md).
+# Block until a ckati process exists; print its pid.  With CKATI_WAIT_USR2
+# set, every ckati waits in main() before doing any makefile work, so there
+# is no attach race.
 wait_for_ckati() {
     local p
     while :; do
@@ -102,7 +110,14 @@ attach() {
         notice "         rebuild first: (cd code/build/kati && ./build.sh)"
     fi
     notice "gdb $sym -p $pid"
-    gdb "$sym" -p "$pid"
+    gdb "$sym" -p "$pid" || true
+
+    # Release the CKATI_WAIT_USR2 hook.  To keep gdb attached and let the
+    # build proceed instead, run `(gdb) signal SIGUSR2` before leaving gdb.
+    if kill -0 "$pid" 2>/dev/null; then
+        notice "releasing pid $pid (SIGUSR2)"
+        kill -USR2 "$pid" 2>/dev/null || true
+    fi
 }
 
 # -- main ------------------------------------------------------------------
