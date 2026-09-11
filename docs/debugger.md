@@ -12,6 +12,9 @@ through it, so open the shell first and run the steps below from there:
 nix develop
 ```
 
+Inside the dev shell the repo's `bin/` is already on `PATH` (`flake.nix`), so
+the examples below use bare `patchman`; outside it, use `bin/patchman`.
+
 ## Go dev tools (gopls + dlv)
 
 The tree's prebuilt Go is go1.15.6 — too old for modern `go install
@@ -32,11 +35,12 @@ Every ckati invocation (`dumpvars` x2, `kati build/package/cleanspec`) execs
 makes ckati wait before any makefile work until it receives `SIGUSR2`, so gdb
 can attach without a race.
 
-1. Rebuild ckati with debug info and install it over the prebuilt. The stock
-   binary is kept as `ckati.prebuilt.bak`; `repo sync prebuilts/build-tools`
-   restores it.
+1. Apply the hook and the build script, then rebuild ckati with debug info and
+   install it over the prebuilt. The stock binary is kept as
+   `ckati.prebuilt.bak`; `repo sync prebuilts/build-tools` restores it.
    ```sh
-   cd code/build/kati && ./build.sh
+   patchman apply code/build/kati   # main.cc hook (patch) + build.sh (copy)
+   cd code/build/kati && bash build.sh   # stored build.sh is mode 0644
    ```
 2. Stop at the hook and attach from a second terminal:
    ```sh
@@ -80,7 +84,8 @@ command:
 - `patchdb/code/build/soong/soong_ui.bash.patch`
 - `patchdb/code/build/blueprint/microfactory/microfactory.bash.patch`
 
-These patches are normally **not** applied (`patchman status`). To debug:
+After a fresh `bootstrap.sh` these patches are **not applied** (`patchman
+status`); a debugging session may have applied some of them. To debug:
 
 1. Apply the patch, then uncomment the `dlv …` line and comment out the plain
    launch line in the file it patches:
@@ -94,9 +99,20 @@ These patches are normally **not** applied (`patchman status`). To debug:
 3. Connect and drive it (one client at a time; `quit` when done so the build
    can finish):
    ```sh
-   dlv connect localhost:2345
+   dlv connect localhost:2345     # dlv comes from scripts/setup_go_tools.sh
    ```
 
 `scripts/setup_go_tools.sh` installs a compatible `dlv` next to the prebuilt Go
 (see "Go dev tools" above). To capture source-line values and turn the session
 into a write-up, follow the `dlv-src-analysis` skill.
+
+## envsetup (bashdb)
+
+`build/make/envsetup.sh` has a patch (`patchdb/code/build/make/envsetup.sh.patch`)
+that adds a commented-out `bashdb` variant of the `get_build_var()` call. Apply
+it, then uncomment that line and comment out the original; point `BASHDB_BIN`,
+`BASHDB_FIFO`, `BASHDB_FIFO_IN` and `BASHDB_LIB` at your bashdb install:
+
+```sh
+patchman apply code/build/make/envsetup.sh
+```

@@ -66,9 +66,9 @@ Debug hooks (gdb for ckati, dlv for soong_ui/microfactory) are in
 `code/` is a `repo` checkout, and the expensive part of a fresh
 `./bootstrap.sh` is *downloading* the git object stores, not checking them out.
 Those stores live in `code/.repo/` (`project-objects/`, `projects/`).  So the
-cheap way back to a pristine tree is to keep `.repo/` and rebuild the working
-tree from it: deleting `code/` entirely is the cleanest reset, this is the best
-we can do without re-downloading everything.
+cheap reset is to keep `.repo/`, delete every project checkout under `code/`,
+then rebuild from the local objects -- the best we can do without
+re-downloading everything.
 
 `scripts/deep_clean.sh` is the delete half only: keep `code/.repo/`, drop every
 other top-level entry there.  The re-sync is a separate step, so the two
@@ -80,23 +80,36 @@ scripts/deep_clean.sh --dry-run  # list what would be removed
 scripts/deep_clean.sh -y         # no confirmation prompt
 
 LOCAL_ONLY=1 ./bootstrap.sh      # rebuild from local objects, no network
+bin/patchman verify              # should print "patchdb OK"
 ```
 
 It touches nothing under `.repo/` -- manifest and object stores are left as
 they are.  It runs anywhere; the local sync needs the FHS dev shell
-(`nix develop`).  `deep_clean.sh` refuses to delete without `-y` when stdin is
-not a tty.
+(`nix develop`), and `deep_clean.sh` refuses to delete without `-y` when stdin
+is not a tty.  Anything under `code/` that is neither `.repo/` nor a synced
+project's tracked file is deleted, so put it under patchman first
+(`bin/patchman add`).
 
 What survives and what comes back:
 
 - **survives** — `code/.repo/` (objects, refs, manifests, `local_manifests/`).
-- **re-checked-out** — every `repo` project working tree.
-- **re-applied** by `bootstrap.sh` — the patchman copy entries (local manifest,
-  `device/minimum/` product makefiles).
+- **re-checked-out** — every `repo` project working tree (the minimal set:
+  `.sync_paths.txt` plus the `sync_deps` repos, 13 total).
+- **re-applied** by `bootstrap.sh` — only what the build needs: the local
+  manifest and the `device/minimum/` product makefiles.  The standalone copies
+  (`code/build.sh`, `code/build/kati/build.sh`) and every debug patch are applied
+  **manually** (`bin/patchman apply ...`); `bin/patchman verify` still prints
+  `patchdb OK`, because an unapplied copy entry is just `not applied`.
+- **pruned** — anything previously synced outside that minimal set (e.g.
+  `bionic/`, `system/`); do not use `repo list` to judge what is checked out.
 - **gone** — `code/out/`, so the next `m nothing` is a clean build.
 
-If a project was never fully fetched, `--local-only` fails on it; fall back to a
-normal `repo sync` for just that path.
+Recovery: if `--local-only` fails, that project's objects were never fully
+fetched -- re-fetch just it with `cd code && repo sync -c -j8 <path>` (no
+`--local-only`), then re-run `LOCAL_ONLY=1 ./bootstrap.sh`.  Watch the
+`sync_core` guard: it returns early once `build/soong` and
+`prebuilts/build-tools` exist, so if a partial checkout left those in place,
+remove the incomplete project's directory first.
 
 ## Patchman workflows
 

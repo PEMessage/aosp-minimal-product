@@ -969,10 +969,14 @@ def check_orphan_origs(context: Context) -> list[str]:
 def check_entries(context: Context) -> list[str]:
     issues = []
     for entry in all_entries(context.patchdb):
+        # An absent copy target is just "not applied" (copy entries are applied
+        # on demand), so only patch entries need a source to exist.
+        if entry.mode is not PATCH:
+            continue
         if not entry.target(context.root).exists():
-            issues.append(f"stored entry has no source file: "
+            issues.append(f"patch entry has no source file: "
                           f"{context.display(entry.rel)}")
-        if entry.mode is PATCH and patch_unparseable(context.root, entry.stored):
+        if patch_unparseable(context.root, entry.stored):
             issues.append(f"unparseable patch: {context.display(entry.rel)}")
     return issues
 

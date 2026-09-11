@@ -29,7 +29,7 @@ Layout, repo set and product-naming rationale. Agent-facing rules are in
 
 ## Minimal repo set
 
-The whole tree needed for a green `m nothing` is nine repos plus the device
+The whole tree needed for a green `m nothing` is thirteen repos plus the device
 files:
 
 - `build/make`, `build/soong`, `build/blueprint` (build system core; `build/make`

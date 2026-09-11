@@ -137,13 +137,18 @@ Both modes are in use here:
   `local_manifests/` directory** in this repo; instead these are real files in
   the tree, owned by patchman as whole-file copies:
   * the product makefiles — `code/device/minimum/` (`AndroidProducts.mk`,
-    `lineage_minimum.mk`, `BoardConfig.mk`), and
-  * the repo local manifests — `code/.repo/local_manifests/kati.xml`.
+    `lineage_minimum.mk`, `BoardConfig.mk`),
+  * the repo local manifests — `code/.repo/local_manifests/kati.xml`, and
+  * two standalone build helpers — `code/build.sh` and
+    `code/build/kati/build.sh`.
 
-`bootstrap.sh` materialises both with `patchman apply code/device/minimum` and
-`patchman apply code/.repo/local_manifests` (see `install_local_manifests` /
-`setup_product`). To edit them, change the file in the tree and re-run
-`patchman add --mode copy <file>` to refresh the stored copy.
+`bootstrap.sh` materialises only what the build needs — `patchman apply
+code/device/minimum` and `patchman apply code/.repo/local_manifests` (see
+`install_local_manifests` / `setup_product`).  The two standalone helpers are
+applied **manually** (`patchman apply code/build.sh`, `patchman apply
+code/build/kati`); an unapplied copy entry is just `not applied`.  To edit any
+of them, change the file in the tree and re-run `patchman add --mode copy
+<file>` to refresh the stored copy.
 
 ## Usage
 
@@ -191,7 +196,9 @@ Notes
   tracked copy-mode entry whose target still equals its `.orig` baseline is
   "not applied", not "conflict".
 * `verify` checks for orphan `.orig` baselines, unparseable patch files,
-  stored entries whose source file is gone, a malformed `patchdb/config`, and
-  any leftover legacy `.patchman.json`; it exits non-zero on any problem.
+  stored **patch** entries whose source file is gone, a malformed
+  `patchdb/config`, and any leftover legacy `.patchman.json`; it exits non-zero
+  on any problem.  An absent copy target is not an error: it is just
+  `not applied`.
 * `patchman` itself needs no FHS container: it only shells out to `git`,
   `diff` and `patch`.
