@@ -30,17 +30,24 @@ CERNET/MirrorZ mirrors in git (`docs/repository.md`).
 ## Commands
 
 The Android build needs an FHS filesystem layout (`/bin/pwd` etc.). On NixOS
-this comes from the repo's dev shell, which is a `buildFHSEnv`: **open it
-interactively** — `nix develop --command <cmd>` does not reliably run commands
-through it.
+this comes from the repo's dev shell, which is a `buildFHSEnv`. Open it
+interactively with `nix develop`, or run a single command non-interactively
+through the FHS wrapper app:
 
 ```sh
 # NixOS: open the FHS dev environment (interactive)
 nix develop
+
+# ...or run one command inside it without an interactive shell:
+nix run .# -- -c './bootstrap.sh'
+nix run .# -- -c 'cd code && source build/envsetup.sh && lunch lineage_minimum-eng && m nothing'
 ```
 
-If you cannot open an interactive shell yourself, ask the user to run
-`nix develop` and then the commands below inside it.
+`nix develop --command <cmd>` cannot work: the dev shell is the FHS env's
+`passthru.env`, whose `shellHook` `exec`s bubblewrap before Nix gets a chance
+to run the `--command`, so the command is silently dropped. `nix run` goes
+through the wrapper binary (`bin/aosp-env`), which forwards its arguments to
+bash *inside* the chroot and propagates the exit code.
 
 Then run the core flow from **inside** that shell:
 

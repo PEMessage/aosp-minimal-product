@@ -9,8 +9,7 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-    in {
-      devShells.${system}.default = (pkgs.buildFHSEnv {
+      fhs = pkgs.buildFHSEnv {
         name = "aosp-env";
         targetPkgs = pkgs: with pkgs; [
           # unix
@@ -90,7 +89,20 @@
           # bootstrap.sh sources the same helper.
           source "$(tcd flake.nix && pwd)/scripts/mirror_env.sh"
         '';
+      };
+    in {
+      # Interactive shell: `nix develop`.
+      devShells.${system}.default = fhs.env;
 
-      }).env;
+      # Non-interactive use: `nix run .# -- -c '<command>'`.
+      # buildFHSEnv's `.env` shellHook execs bwrap and silently drops any
+      # `nix develop -c` command, so commands must go through the FHS wrapper
+      # binary, which forwards its arguments to bash inside the chroot.
+      packages.${system}.default = fhs;
+      apps.${system}.default = {
+        type = "app";
+        program = "${fhs}/bin/aosp-env";
+        meta.description = "Run a command inside the AOSP FHS environment";
+      };
     };
 }
