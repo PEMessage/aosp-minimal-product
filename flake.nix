@@ -86,6 +86,9 @@
 
           export PATH="$(tcd flake.nix && readlink --canonicalize-missing code/prebuilts/go/linux-x86/bin):$PATH"
           export PATH="$(tcd flake.nix && readlink --canonicalize-missing bin):$PATH"
+          # Scope the MirrorZ URL rewrites to this dev shell (not ~/.gitconfig);
+          # bootstrap.sh sources the same helper.
+          source "$(tcd flake.nix && pwd)/scripts/mirror_env.sh"
         '';
 
       }).env;

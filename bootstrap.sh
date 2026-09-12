@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # LineageOS minimum-product repro (Android 12, lineage-19.1).
 # Distro-agnostic: run inside the FHS container (NixOS) or directly (other
-# distros). Everything is fetched from Tsinghua mirrors; anything already
-# present is skipped. Zero source patches: the 12 build system needs none.
+# distros). Canonical upstream URLs are used everywhere; Mirrors are wired into
+# git itself (see configure_mirrors), so no manifest is ever edited. Anything
+# already present is skipped. Zero source patches: the 12 build system needs none.
 # Verified end-to-end on lineage-19.1: lunch lineage_minimum-eng && m nothing green.
 # Idempotent: re-running is a no-op.
 set -euo pipefail
@@ -18,7 +19,9 @@ else
     LOCAL_ONLY=""
 fi
 
-MANIFEST_URL="https://mirrors.tuna.tsinghua.edu.cn/git/lineageOS/LineageOS/android.git"
+MANIFEST_URL="https://github.com/LineageOS/android.git"
+# Canonical upstream; scripts/mirror_env.sh rewrites it (and
+# android.googlesource.com) to the MirrorZ union URLs, scoped to this shell.
 
 # -- helpers ---------------------------------------------------------------
 
@@ -69,6 +72,15 @@ ensure_repo() {
     runeval export PATH="$HOME/bin:$PATH"
 }
 
+# Route the canonical upstreams through the MirrorZ union URLs for this run.
+# Scoped to the environment (no ~/.gitconfig mutation); the dev shell sources
+# the same helper.  Idempotent.
+configure_mirrors() {
+    title
+    # shellcheck source=scripts/mirror_env.sh
+    source "$HERE/scripts/mirror_env.sh"
+}
+
 init_tree() {
     title
 
@@ -82,11 +94,7 @@ init_tree() {
     runcmd repo init -u "$MANIFEST_URL" -b "$BRANCH" \
         --repo-url https://mirrors.ustc.edu.cn/aosp/git-repo.git \
         --repo-rev v2.66.1 \
-        --no-repo-verify --no-clone-bundle --depth 1
-    # Rewrite remotes to the Tsinghua mirrors.
-    runeval "$HERE/scripts/make_manifest.py" \
-        "$TOP/.repo/manifests/default.xml" '>' "$TOP/.repo/manifests/default.xml.tuna"
-    runcmd mv "$TOP/.repo/manifests/default.xml.tuna" "$TOP/.repo/manifests/default.xml"
+        --no-repo-verify --no-clone-bundle --depth 1 --manifest-depth 1
 }
 
 # Apply the repo-local manifests from their patchman copy entries (e.g.
@@ -157,6 +165,7 @@ verify_build() {
 main() {
     check_env
     ensure_repo
+    configure_mirrors
     init_tree
     install_local_manifests
     sync_core

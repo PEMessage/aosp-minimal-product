@@ -8,7 +8,8 @@ understandable by reducing it to the smallest set of sources that can still
 build end-to-end.
 
 The project is tuned for **LineageOS 19.1 (Android 12)**, branch `lineage-19.1`.
-It is distro-agnostic and pulls everything from Tsinghua mirrors.
+It is distro-agnostic; the canonical upstreams are rewritten to the
+CERNET/MirrorZ mirrors in git (`docs/repository.md`).
 
 ## Core guidelines
 

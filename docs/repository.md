@@ -11,10 +11,17 @@ Layout, repo set and product-naming rationale. Agent-facing rules are in
   (`lunch lineage_minimum-eng`; headless x86_64, no kernel/bootloader/images) and
   the local manifests live in the tree (`code/device/minimum/`,
   `code/.repo/local_manifests/`) as patchman copy entries.
-- `scripts/make_manifest.py` — rewrites manifest remotes to Tsinghua AOSP.
-  Shallow cloning comes from `repo init --depth 1` (bootstrap.sh pins the repo
-  tool to `v2.66.1`, which applies that depth to every project without an
-  explicit `clone-depth`), so no clone-depth injection is needed.
+- Mirroring is git-level, not manifest-level: canonical upstream URLs are kept
+  and rewritten to the MirrorZ union URLs by `scripts/mirror_env.sh`, which
+  appends the two `url.*.insteadOf` rules to git's *environment* config
+  (`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`).  `bootstrap.sh`
+  and the nix dev shell both source it, so the rewrite is scoped to this
+  project's shell and never touches `~/.gitconfig`.  Local manifests cannot
+  override a remote (repo rejects a duplicate remote with different
+  attributes), so env-scoped git config is the alternative to editing the
+  manifest.  Shallow cloning comes from `repo init --depth 1` (bootstrap.sh
+  pins the repo tool to `v2.66.1`, which stores that as `repo.depth` and
+  applies it to every project without an explicit `clone-depth`).
 - `scripts/sync_paths.py` — extracts the minimal `build/` + curated `prebuilts/`
   paths from the manifest.
 - `scripts/setup_go_tools.sh` — builds `gopls` + `dlv` with the tree's prebuilt
@@ -22,6 +29,8 @@ Layout, repo set and product-naming rationale. Agent-facing rules are in
 - `scripts/deep_clean.sh` — DeepClean: drop the `code/` working tree while
   keeping `code/.repo/`, so it can be re-synced without re-downloading; see
   `AGENTS.md`.
+- `scripts/mirror_env.sh` — sourced by `bootstrap.sh` and the dev shell; injects
+  the MirrorZ `url.*.insteadOf` rewrites into git's environment config.
 - `bin/patchman` — git-like per-file patch manager for the out-of-tree `repo`
   workspace; see `docs/patchman.md`.
 - `docs/` — design notes, debugging, patchman manual.
