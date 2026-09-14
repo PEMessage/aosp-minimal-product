@@ -1,5 +1,4 @@
 /code
 __pycache__/
 # local patchman settings (like .git/config); created on demand by `patchman config`
-/patchdb/config
 /patchdb/config.tmp
