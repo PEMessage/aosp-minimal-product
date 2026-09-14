@@ -23,8 +23,14 @@ eval "export GIT_CONFIG_KEY_${_mirror_n}='url.https://mirrors.cernet.edu.cn/AOSP
 eval "export GIT_CONFIG_VALUE_${_mirror_n}='https://android.googlesource.com'"
 _mirror_n=$((_mirror_n + 1))
 
-eval "export GIT_CONFIG_KEY_${_mirror_n}='url.https://mirrors.cernet.edu.cn/lineageOS/.insteadOf'"
-eval "export GIT_CONFIG_VALUE_${_mirror_n}='https://github.com/'"
+# Scope the github rewrite to the LineageOS org instead of all of github.com:
+# the MirrorZ /lineageOS/ mirror only carries LineageOS/*, so a bare
+# `github.com/` prefix would silently misroute any other owner (e.g.
+# github.com/TheMuppets/...) to a 404.  Add one pair per extra owner here if a
+# manifest ever needs one; the base must repeat the owner because insteadOf
+# replaces the matched prefix verbatim.
+eval "export GIT_CONFIG_KEY_${_mirror_n}='url.https://mirrors.cernet.edu.cn/lineageOS/LineageOS.insteadOf'"
+eval "export GIT_CONFIG_VALUE_${_mirror_n}='https://github.com/LineageOS'"
 _mirror_n=$((_mirror_n + 1))
 
 export GIT_CONFIG_COUNT="$_mirror_n"
