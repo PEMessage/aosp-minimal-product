@@ -44,6 +44,15 @@
 # would then replace a good database with []. Appending merges incremental
 # rebuilds and leaves the file alone on a no-op run.
 #
+# The database is then post-processed to make the compiler absolute. bear
+# stores only the basename (`clang++`): the AOSP launcher re-execs the real
+# clang-12 with argv[0]="clang++", and that is the exec bear records. clangd
+# resolves a bare name through PATH -- in the dev shell that is the Nix GCC
+# wrapper, not the prebuilt clang -- so `-stdlib=libc++` resolves against
+# nothing and every include (<string>, <limits.h>, ...) is "file not found".
+# Pinning $TC/bin/clang++ lets clangd drive the prebuilt toolchain directly;
+# no project .clangd / --query-driver is needed.
+#
 # Requires the FHS dev shell (glibc headers + crt objects for linking):
 #   nix develop
 #   cd code/build/kati && ./build.sh
@@ -75,6 +84,22 @@ make_args=(
 
 if command -v bear >/dev/null 2>&1; then
     bear --append --output "$DIR/compile_commands.json" -- make "${make_args[@]}"
+
+    # Rewrite argv[0] of every entry to the absolute prebuilt clang++ (see
+    # the header comment). A second copy of a file (from an incremental
+    # rebuild) is collapsed by bear on the next --append read.
+    python3 - "$DIR/compile_commands.json" "$TC/bin/clang++" <<'PY'
+import json, sys
+
+path, cxx = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    db = json.load(f)
+for entry in db:
+    entry["arguments"][0] = cxx
+with open(path, "w") as f:
+    json.dump(db, f, indent=2)
+    f.write("\n")
+PY
 else
     make "${make_args[@]}"
 fi

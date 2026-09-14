@@ -1,3 +1,4 @@
 [alias]
-st = status -- .
+st = status
+lst = status -- .
 
