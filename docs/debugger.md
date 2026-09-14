@@ -49,9 +49,9 @@ can attach without a race.
    CKATI_WAIT_USR2=1 m nothing
 
    # terminal 2
-   bin/ckati-attach          # --loop to catch every invocation
+   ./scripts/ckati-attach.sh    # --loop to catch every invocation
    ```
-3. `bin/ckati-attach` attaches gdb and releases the process with `SIGUSR2` when
+3. `./scripts/ckati-attach.sh` attaches gdb and releases the process with `SIGUSR2` when
    gdb exits. To keep gdb attached and let the build continue, use
    `(gdb) signal SIGUSR2` then `(gdb) continue` instead.
 
@@ -67,7 +67,7 @@ blocks. `ckati --realpath` never waits.
 
 With `kernel.yama.ptrace_scope=1` (many distros' default) a non-root tracer may
 only attach to its own descendants. ckati's parent is soong_ui, not gdb, so the
-attach is denied. Open it up once per boot, or run `bin/ckati-attach` under
+attach is denied. Open it up once per boot, or run `./scripts/ckati-attach.sh` under
 sudo:
 
 ```sh

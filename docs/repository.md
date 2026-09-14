@@ -22,8 +22,11 @@ Layout, repo set and product-naming rationale. Agent-facing rules are in
   manifest.  Shallow cloning comes from `repo init --depth 1` (bootstrap.sh
   pins the repo tool to `v2.66.1`, which stores that as `repo.depth` and
   applies it to every project without an explicit `clone-depth`).
-- `scripts/sync_paths.py` — extracts the minimal `build/` + curated `prebuilts/`
-  paths from the manifest.
+- `scripts/repo-list.sh` — lists every manifest project as `name:path` without
+  syncing (`repo manifest` + `xmlstarlet`, so it works on a fresh tree);
+  composable with grep/awk.
+- `scripts/sync_paths.sh` — prints the minimal `build/` + curated `prebuilts/`
+  paths from that list.
 - `scripts/setup_go_tools.sh` — builds `gopls` + `dlv` with the tree's prebuilt
   Go; see `docs/debugger.md`.
 - `scripts/deep_clean.sh` — DeepClean: drop the `code/` working tree while
@@ -55,8 +58,9 @@ files:
 - `vendor/lineage` (required: `build/envsetup.sh` sources
   `vendor/lineage/build/envsetup.sh` unconditionally)
 
-`sync_paths.py` also lists `build/bazel` and `build/pesto` (part of the
-manifest's `build/` set, small, harmless).
+`sync_paths.sh` also lists `build/bazel` and `build/pesto` (part of the
+manifest's `build/` set, small, harmless), plus `build/kati` from the local
+manifest.
 
 ## Why the product is `lineage_minimum`
 

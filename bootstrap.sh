@@ -110,7 +110,7 @@ sync_core() {
     title
     [[ -d "$TOP/build/soong" && -d "$TOP/prebuilts/build-tools" ]] && return 0
     local paths="$TOP/.sync_paths.txt"
-    runeval "$HERE/scripts/sync_paths.py" "$TOP" '>' "$paths"
+    runeval "$HERE/scripts/sync_paths.sh" "$TOP" '>' "$paths"
     runcmd repo sync -c -j "$JOBS" $LOCAL_ONLY $(cat "$paths")
 }
 

@@ -14,17 +14,17 @@
 # PID 1; the kernel silently drops SIGSTOP sent to a namespace init.
 #
 #   terminal 1:  CKATI_WAIT_USR2=1 m nothing
-#   terminal 2:  bin/ckati-attach
+#   terminal 2:  scripts/ckati-attach.sh
 #
 # To let the build proceed while keeping gdb attached, send SIGUSR2 from
 # another shell, or from inside gdb:  (gdb) signal SIGUSR2  then
 # (gdb) continue.
 #
 # Usage:
-#   bin/ckati-attach             # poll for a waiting ckati, attach, release
-#   bin/ckati-attach --loop      # after each gdb session, wait for the next
+#   scripts/ckati-attach.sh             # poll for a waiting ckati, attach, release
+#   scripts/ckati-attach.sh --loop      # after each gdb session, wait for the next
 #                                # ckati (one `m nothing` runs it several times)
-#   bin/ckati-attach 12345       # attach to a given pid
+#   scripts/ckati-attach.sh 12345       # attach to a given pid
 #
 # yama note: kernel.yama.ptrace_scope=1 (many distros' default) denies
 # non-root attach unless the tracer is the tracee's parent; soong_ui is,
