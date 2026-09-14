@@ -53,6 +53,14 @@
 # Pinning $TC/bin/clang++ lets clangd drive the prebuilt toolchain directly;
 # no project .clangd / --query-driver is needed.
 #
+# The entries also get `-idirafter <glibc-dev include>`. On the NixOS host
+# (clangd outside `nix develop`) there is no /usr/include, so libc++ header
+# chains dead-end in glibc (<features.h>, <stdio.h>, ...) and clangd reports
+# dozens of errors; inside the FHS the driver finds /usr/include on its own.
+# Pointing at the real glibc-dev tree makes the database work in both. It has
+# to be -idirafter (lowest priority): with -isystem it outranks clang's builtin
+# <math.h> and leaves a "no member named 'signbit'" error.
+#
 # Requires the FHS dev shell (glibc headers + crt objects for linking):
 #   nix develop
 #   cd code/build/kati && ./build.sh
@@ -85,17 +93,36 @@ make_args=(
 if command -v bear >/dev/null 2>&1; then
     bear --append --output "$DIR/compile_commands.json" -- make "${make_args[@]}"
 
-    # Rewrite argv[0] of every entry to the absolute prebuilt clang++ (see
-    # the header comment). A second copy of a file (from an incremental
-    # rebuild) is collapsed by bear on the next --append read.
-    python3 - "$DIR/compile_commands.json" "$TC/bin/clang++" <<'PY'
+    # /usr/include is a merged dir in the FHS; features.h resolves back to the
+    # glibc-dev store tree, which is what clangd needs outside the FHS too.
+    glibc_inc=""
+    if [[ -r /usr/include/features.h ]]; then
+        glibc_inc="$(dirname "$(readlink -f /usr/include/features.h)")"
+    fi
+
+    # Rewrite argv[0] of every entry to the absolute prebuilt clang++ and
+    # (re)inject the glibc include (see the header comment). Injecting is
+    # idempotent: any -idirafter pair already present is dropped first, so a
+    # re-run does not grow the arguments. A second copy of a file (from an
+    # incremental rebuild) is collapsed by bear on the next --append read.
+    python3 - "$DIR/compile_commands.json" "$TC/bin/clang++" "$glibc_inc" <<'PY'
 import json, sys
 
-path, cxx = sys.argv[1], sys.argv[2]
+path, cxx, glibc_inc = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path) as f:
     db = json.load(f)
 for entry in db:
-    entry["arguments"][0] = cxx
+    args, clean, i = entry["arguments"], [], 0
+    args[0] = cxx
+    while i < len(args):  # drop a previously injected -idirafter pair
+        if args[i] == "-idirafter" and i + 1 < len(args):
+            i += 2
+        else:
+            clean.append(args[i])
+            i += 1
+    if glibc_inc:
+        clean[1:1] = ["-idirafter", glibc_inc]
+    entry["arguments"] = clean
 with open(path, "w") as f:
     json.dump(db, f, indent=2)
     f.write("\n")
